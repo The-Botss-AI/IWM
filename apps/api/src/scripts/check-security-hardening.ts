@@ -20,6 +20,10 @@
  *     deleted rows.
  * 11. Services: coworker profiles only, public signup answers the same for a
  *     known email, platform mail never reads a user's mailbox.
+ * 12. Passwords: a malformed stored hash never accepts any password.
+ * 13. A base OWNER / ADMIN role under a narrower custom role is not an admin.
+ * 14. The mail relay only carries vouched sender addresses.
+ * 15. Task parents cannot form a cycle.
  *
  * Run: pnpm --filter @botss/api test
  */
@@ -35,7 +39,7 @@ import {
   ForbiddenException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { defineAbilityFor, presetPermissions } from '@botss/auth';
+import { defineAbilityFor, hashPassword, presetPermissions, verifyPassword } from '@botss/auth';
 import { withSoftDelete } from '@botss/database';
 import {
   createChatRequestSchema,
@@ -62,11 +66,14 @@ import { IS_PUBLIC_KEY } from '../common/decorators/public.decorator';
 import { REQUIRED_ABILITY_KEY } from '../common/decorators/required-ability.decorator';
 import { SKIP_PERMISSIONS_KEY } from '../common/decorators/skip-permissions.decorator';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { adminCheckedRole } from '../common/permissions/effective-permissions';
 import { abilityRow, assertCanUpdateProject } from '../common/permissions/request-ability';
 import { LeadsService } from '../leads/leads.service';
+import { relayMayCarry } from '../mail/mail-send.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
+import { TasksService } from '../tasks/tasks.service';
 import { UsersService } from '../users/users.service';
 import { inviteLinkVisible, presetGrantCheckNeeded } from '../workspaces/invite-link-policy';
 
@@ -444,6 +451,81 @@ async function main(): Promise<void> {
     // Platform mail never reads a user's mailbox (the MAIL_FROM lookup).
     const processor = readFileSync(resolve(__dirname, '../email/email.processor.ts'), 'utf8');
     assert.ok(!/mailAccount\./.test(processor), 'email.processor must not query MailAccount');
+  }
+
+  // 12. Password verification ---------------------------------------------------
+  {
+    const good = hashPassword('correct horse battery staple');
+    assert.ok(verifyPassword(good, 'correct horse battery staple'));
+    assert.ok(!verifyPassword(good, 'wrong password'));
+    // Buffer.from(_, 'hex') drops invalid characters: these used to decode to
+    // an empty key that matched ANY password.
+    for (const malformed of [
+      'scrypt$00$zz',
+      'scrypt$zz$zz',
+      'scrypt$00ff$0',
+      `scrypt$${'ab'.repeat(16)}$${'cd'.repeat(10)}`,
+      `${good}$extra`,
+      'scrypt$$',
+    ]) {
+      assert.ok(!verifyPassword(malformed, 'anything'), `malformed hash refused: ${malformed}`);
+    }
+  }
+
+  // 13. Admin roles under a custom role --------------------------------------
+  {
+    const full = presetPermissions({
+      systemRole: 'EMPLOYEE',
+      workspaceMemberships: [{ role: 'ADMIN' }],
+    });
+    const narrow = { company: [], workspace: ['workspace.view'] };
+    assert.equal(adminCheckedRole('ADMIN', full), 'ADMIN', 'a real admin stays admin');
+    assert.equal(adminCheckedRole('OWNER', full), 'OWNER');
+    assert.equal(adminCheckedRole('ADMIN', narrow), 'MEMBER', 'base ADMIN under a narrow role');
+    assert.equal(adminCheckedRole('OWNER', narrow), 'MEMBER');
+    assert.equal(adminCheckedRole('VIEWER', narrow), 'VIEWER', 'other roles unchanged');
+    assert.equal(adminCheckedRole(undefined, narrow), undefined);
+  }
+
+  // 14. Mail relay sender addresses ------------------------------------------
+  {
+    const env = {
+      MAIL_RELAY_SENDER_DOMAINS: 'company.example, @shared.example',
+    } as NodeJS.ProcessEnv;
+    assert.ok(relayMayCarry('Me@Own.example', 'me@own.example', {}), "the owner's sign-in address");
+    assert.ok(relayMayCarry('info@company.example', 'me@own.example', env), 'a listed domain');
+    assert.ok(relayMayCarry('desk@shared.example', null, env), 'a listed domain with @');
+    assert.ok(!relayMayCarry('ceo@company.example', 'me@own.example', {}), 'unlisted: not carried');
+    assert.ok(!relayMayCarry('ceo@other.example', 'me@own.example', env), 'another domain');
+    assert.ok(!relayMayCarry('not-an-address', 'me@own.example', env));
+  }
+
+  // 15. Task parent cycles ---------------------------------------------------
+  {
+    // T1 <- T2 <- T3 (T3's parent is T2, T2's parent is T1).
+    const parents: Record<string, string | null> = { t1: null, t2: 't1', t3: 't2' };
+    const tasks = new TasksService(
+      {
+        client: {
+          task: {
+            findUnique: async (a: { where: { id: string } }) => ({
+              parentTaskId: parents[a.where.id] ?? null,
+            }),
+          },
+        },
+      } as unknown as PrismaService,
+      {} as never,
+      {} as never,
+    );
+    const walk = (
+      tasks as unknown as {
+        assertNotOwnAncestor: (taskId: string, parentId: string) => Promise<void>;
+      }
+    ).assertNotOwnAncestor.bind(tasks);
+    await assert.rejects(walk('t1', 't3'), BadRequestException, 't1 under its grandchild t3');
+    await assert.rejects(walk('t1', 't1'), BadRequestException, 'a task under itself');
+    await walk('t3', 't1');
+    await walk('t2', 't1');
   }
 
   console.log('security-hardening: OK');
