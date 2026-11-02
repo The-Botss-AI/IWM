@@ -289,20 +289,21 @@ Never put real secrets in the example files or in git. In production, pass them 
 
 ### User mail (IMAP/SMTP client)
 
-| Name                      | Required | What it does                                                                                                                                              | Example                |
-| ------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
-| `MAIL_ENCRYPTION_KEY`     | Required | 64 hex characters (32 bytes). Encrypts stored IMAP/SMTP passwords. Do not rotate on an install that has mail accounts.                                    | `openssl rand -hex 32` |
-| `MAIL_DEFAULT_IMAP_HOST`  | Optional | IMAP host used when the server auto-provisions a mail account for a cPanel-managed user. Needs `MAIL_DEFAULT_SMTP_HOST` too. Unset: no auto-provisioning. | `mail.example.com`     |
-| `MAIL_DEFAULT_SMTP_HOST`  | Optional | SMTP host for auto-provisioned mail accounts. Unset: no auto-provisioning.                                                                                | `mail.example.com`     |
-| `MAIL_SYNC_BATCH`         | Optional | Messages fetched per IMAP round trip.                                                                                                                     | `25`                   |
-| `MAIL_INITIAL_SYNC_LIMIT` | Optional | Most messages imported per run (the rest continue in the background).                                                                                     | `200`                  |
-| `MAIL_MAX_SOURCE_BYTES`   | Optional | Above this size only a message's text parts are downloaded, not attachments.                                                                              | `15728640`             |
-| `MAIL_SEND_CONCURRENCY`   | Optional | Parallel outbound sends on the mail queue.                                                                                                                | `5`                    |
-| `MAIL_RELAY_HOST`         | Optional | Send all outbound user mail through this SMTP relay instead of each account's own SMTP. Useful when a mail host rate-limits your server's IP.             | `smtp-relay.brevo.com` |
-| `MAIL_RELAY_PORT`         | Optional | Relay port.                                                                                                                                               | `587`                  |
-| `MAIL_RELAY_SECURE`       | Optional | `true` for implicit TLS.                                                                                                                                  | `false`                |
-| `MAIL_RELAY_USER`         | Optional | Relay login.                                                                                                                                              | (relay user)           |
-| `MAIL_RELAY_PASSWORD`     | Optional | Relay password.                                                                                                                                           | (secret)               |
+| Name                        | Required | What it does                                                                                                                                                      | Example                |
+| --------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| `MAIL_ENCRYPTION_KEY`       | Required | 64 hex characters (32 bytes). Encrypts stored IMAP/SMTP passwords. Do not rotate on an install that has mail accounts.                                            | `openssl rand -hex 32` |
+| `MAIL_DEFAULT_IMAP_HOST`    | Optional | IMAP host used when the server auto-provisions a mail account for a cPanel-managed user. Needs `MAIL_DEFAULT_SMTP_HOST` too. Unset: no auto-provisioning.         | `mail.example.com`     |
+| `MAIL_DEFAULT_SMTP_HOST`    | Optional | SMTP host for auto-provisioned mail accounts. Unset: no auto-provisioning.                                                                                        | `mail.example.com`     |
+| `MAIL_SYNC_BATCH`           | Optional | Messages fetched per IMAP round trip.                                                                                                                             | `25`                   |
+| `MAIL_INITIAL_SYNC_LIMIT`   | Optional | Most messages imported per run (the rest continue in the background).                                                                                             | `200`                  |
+| `MAIL_MAX_SOURCE_BYTES`     | Optional | Above this size only a message's text parts are downloaded, not attachments.                                                                                      | `15728640`             |
+| `MAIL_SEND_CONCURRENCY`     | Optional | Parallel outbound sends on the mail queue.                                                                                                                        | `5`                    |
+| `MAIL_RELAY_HOST`           | Optional | Send all outbound user mail through this SMTP relay instead of each account's own SMTP. Useful when a mail host rate-limits your server's IP.                     | `smtp-relay.brevo.com` |
+| `MAIL_RELAY_PORT`           | Optional | Relay port.                                                                                                                                                       | `587`                  |
+| `MAIL_RELAY_SECURE`         | Optional | `true` for implicit TLS.                                                                                                                                          | `false`                |
+| `MAIL_RELAY_USER`           | Optional | Relay login.                                                                                                                                                      | (relay user)           |
+| `MAIL_RELAY_PASSWORD`       | Optional | Relay password.                                                                                                                                                   | (secret)               |
+| `MAIL_RELAY_SENDER_DOMAINS` | Optional | Extra sender domains the relay may carry, comma separated. The relay always carries each user's own sign-in address; other mailboxes send through their own SMTP. | `example.com`          |
 
 ### cPanel mailbox provisioning
 
@@ -480,10 +481,10 @@ This is the first public release of software that grew inside one company's depl
 - **Support access with time-limited grants.** An organization admin can grant platform support a scoped, time-limited window into their organization, and revoke it at any time.
 - **Audit log and platform log.** Each organization can read its own audit log, including support actions. Platform-level events go to a separate platform log.
 - **Security alerts.** Bursts of failed sign-ins, mass deletes and very large imports or exports raise alerts in the affected organization's audit log and the platform log. Alerts carry counts and ids only, never content.
-- **Permissions are enforced on the server** with NestJS guards and CASL. The frontend uses the same abilities only to hide what a user cannot do. Every route declares how it is authorized (`@RequireAbility`, `@SkipPermissions` when the service checks, `@Public` or `@PortalRoute`); a route that declares nothing is refused, and `pnpm test` fails on one (`check-route-permissions.ts`).
+- **Permissions are enforced on the server** with NestJS guards and CASL. The frontend uses the same abilities only to hide what a user cannot do. Every route declares how it is authorized (`@RequireAbility`, `@SkipPermissions` when the service checks, `@Public` or `@PortalRoute`); a route that declares nothing is refused, and `pnpm test` fails on one (`check-route-permissions.ts`). A workspace OWNER or ADMIN role counts as admin only while the member holds every workspace permission, so moving an admin to a narrower custom role takes their admin-only access away.
 - **Realtime.** The chat socket refuses handshakes from origins outside `WEB_ORIGIN`, WebSocket included, so another website cannot open a signed-in socket with a visitor's cookie.
 - **Secrets and sessions.** Secrets come from the environment. Mail credentials are encrypted at rest with `MAIL_ENCRYPTION_KEY`. Invitation and portal link tokens are stored only as hashes. The Devices page lists every session and can sign any of them out; suspending or archiving an organization signs its people out.
-- **Platform email** (invitations, password links, signing links) goes only through the organization's own mail settings or the `SMTP_*` transport, never through a mailbox a user added.
+- **Platform email** (invitations, password links, signing links) goes only through the organization's own mail settings or the `SMTP_*` transport, never through a mailbox a user added. The optional `MAIL_RELAY_*` relay carries a user's mail only from their own sign-in address or a domain listed in `MAIL_RELAY_SENDER_DOMAINS`, because mailbox addresses are not verified.
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
