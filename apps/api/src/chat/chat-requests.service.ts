@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   HttpException,
   HttpStatus,
@@ -8,6 +9,8 @@ import {
 } from '@nestjs/common';
 import {
   CHAT_REQUEST_SENT_NOTICE,
+  isReservedChatContent,
+  RESERVED_CHAT_CONTENT_MESSAGE,
   chatRequestBlockListSchema,
   chatRequestBlockSchema,
   chatRequestOkSchema,
@@ -93,6 +96,10 @@ export class ChatRequestsService {
         title: 'Chat requests need an organization',
         status: 403,
       });
+    }
+    // Accepting posts this text as the DM's first message (schema backstop).
+    if (isReservedChatContent(input.message)) {
+      throw new BadRequestException({ title: RESERVED_CHAT_CONTENT_MESSAGE, status: 400 });
     }
     await this.limit(`chatreq:u:h:${me.id}`, SEND_LIMITS.userHour);
     await this.limit(`chatreq:u:d:${me.id}`, SEND_LIMITS.userDay);
@@ -206,9 +213,7 @@ export class ChatRequestsService {
     });
     if (blocked) return;
 
-    const notifyKey = `chatreq:notify:${recipient.id}`;
-    const count = await this.redis.client.incr(notifyKey);
-    if (count === 1) await this.redis.client.expire(notifyKey, 60 * 60);
+    const count = await this.redis.hitWindow(`chatreq:notify:${recipient.id}`, 60 * 60);
     // Still visible in their incoming list; only the bell row is skipped.
     if (count > NOTIFY_PER_RECIPIENT_HOUR) return;
 
@@ -436,10 +441,9 @@ export class ChatRequestsService {
     };
   }
 
-  /** INCR + EXPIRE counter, the same pattern as task-forms and signatures. */
+  /** Fixed-window counter, the same as task-forms and signatures. */
   private async limit(key: string, rule: { max: number; ttl: number }): Promise<void> {
-    const count = await this.redis.client.incr(key);
-    if (count === 1) await this.redis.client.expire(key, rule.ttl);
+    const count = await this.redis.hitWindow(key, rule.ttl);
     if (count > rule.max) {
       throw new HttpException(
         {

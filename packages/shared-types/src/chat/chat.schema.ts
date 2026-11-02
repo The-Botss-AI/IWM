@@ -9,6 +9,23 @@ import { cuid } from '../common/id.js';
  */
 export const CHAT_MESSAGE_MAX_CHARS = 65_536;
 
+/**
+ * Content prefixes the server reserves for the messages it writes itself:
+ * share cards (`__share__:`), call logs (`__call__:`) and membership events
+ * (`__system__:`). The chat UI renders those as cards and system rows, so a
+ * message a person types must never start with one, or anyone in a room could
+ * post a fake card with an arbitrary link, a fake "added to the group" row or
+ * a fake missed call.
+ */
+export const RESERVED_CHAT_CONTENT_PREFIXES = ['__share__:', '__call__:', '__system__:'] as const;
+
+export function isReservedChatContent(content: string | null | undefined): boolean {
+  if (!content) return false;
+  return RESERVED_CHAT_CONTENT_PREFIXES.some((prefix) => content.startsWith(prefix));
+}
+
+export const RESERVED_CHAT_CONTENT_MESSAGE = 'Messages cannot start with this text.';
+
 export const RoomType = z.enum(['DM', 'GROUP', 'TEXT_CHANNEL', 'VOICE_CHANNEL']);
 export type RoomType = z.infer<typeof RoomType>;
 
@@ -217,6 +234,9 @@ export const sendChatMessageBodySchema = z
         message: 'Send some text or attach at least one file.',
       });
     }
+    if (isReservedChatContent(v.content)) {
+      ctx.addIssue({ code: 'custom', path: ['content'], message: RESERVED_CHAT_CONTENT_MESSAGE });
+    }
   });
 export type SendChatMessageBody = z.infer<typeof sendChatMessageBodySchema>;
 
@@ -242,6 +262,9 @@ export const sendChatMessageSchema = z
         message: 'Send some text or attach at least one file.',
       });
     }
+    if (isReservedChatContent(v.content)) {
+      ctx.addIssue({ code: 'custom', path: ['content'], message: RESERVED_CHAT_CONTENT_MESSAGE });
+    }
   });
 export type SendChatMessageInput = z.infer<typeof sendChatMessageSchema>;
 
@@ -255,7 +278,12 @@ export type ListRoomMessagesQuery = z.infer<typeof listRoomMessagesQuerySchema>;
 /** Edit a message body. Only the original sender may edit, and only the text
  *  (attachments are immutable - delete + resend to change files). */
 export const editChatMessageBodySchema = z.object({
-  content: z.string().trim().min(1).max(CHAT_MESSAGE_MAX_CHARS),
+  content: z
+    .string()
+    .trim()
+    .min(1)
+    .max(CHAT_MESSAGE_MAX_CHARS)
+    .refine((c) => !isReservedChatContent(c), RESERVED_CHAT_CONTENT_MESSAGE),
 });
 export type EditChatMessageBody = z.infer<typeof editChatMessageBodySchema>;
 

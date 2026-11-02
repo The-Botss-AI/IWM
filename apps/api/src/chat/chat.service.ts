@@ -27,6 +27,7 @@ import type {
   ShareCardPayload,
   ShareToChatItemType,
 } from '@botss/shared-types';
+import { isReservedChatContent, RESERVED_CHAT_CONTENT_MESSAGE } from '@botss/shared-types';
 import { isFullWorkspaceAdmin } from '@botss/auth';
 
 import { loadEffectivePermissions } from '../common/permissions/effective-permissions';
@@ -36,7 +37,11 @@ import { NotificationsPushService } from '../notifications/notifications-push.se
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { incomingRequestWhere } from './chat-request-rules';
-import { assertNotBlockedInCrossOrgDm, spansOrganizations } from './cross-org-block';
+import {
+  assertNotBlockedInCrossOrgDm,
+  inviteKeepsOrganization,
+  spansOrganizations,
+} from './cross-org-block';
 import {
   CHAT_FANOUT_JOB_OPTIONS,
   CHAT_FANOUT_QUEUE,
@@ -98,6 +103,21 @@ type SystemMsgPayload =
 function systemMessageContent(payload: SystemMsgPayload): string {
   const { event, ...rest } = payload;
   return `${SYSTEM_MSG_PREFIX}:${event}:${JSON.stringify(rest)}`;
+}
+
+/** A call log or membership event: a record of something that happened in its own room. */
+function isRoomEventContent(content: string | null): boolean {
+  return (
+    !!content &&
+    (content.startsWith(`${CALL_LOG_PREFIX}:`) || content.startsWith(`${SYSTEM_MSG_PREFIX}:`))
+  );
+}
+
+/** Text a person writes must never pass for a card or a system row (see shared-types). */
+function assertNotReservedContent(content: string | null | undefined): void {
+  if (isReservedChatContent(content)) {
+    throw new BadRequestException({ title: RESERVED_CHAT_CONTENT_MESSAGE, status: 400 });
+  }
 }
 
 @Injectable()
@@ -875,6 +895,8 @@ export class ChatService {
   }
 
   async sendMessage(userId: string, input: SendChatMessageInput): Promise<ChatRoomMessage> {
+    // The schemas refuse it too; this is the backstop for any other caller.
+    assertNotReservedContent(input.content);
     await this.assertRoomMember(userId, input.roomId);
     await this.assertNotBlockedInCrossOrgDm(userId, input.roomId);
     this.assertOwnStorageUrls(input.attachments);
@@ -2269,6 +2291,12 @@ export class ChatService {
           status: 403,
         });
       }
+    } else {
+      // DMs and groups have no workspace: their organization is their
+      // members'. An invite code must not carry someone from another
+      // organization into a private group; only an accepted chat request
+      // ever opens a conversation across organizations.
+      await this.assertInviteStaysInOrg(userId, invite.roomId, invite.createdById);
     }
     const existing = await this.prisma.client.chatRoomParticipant.findUnique({
       where: { roomId_userId: { roomId: invite.roomId, userId } },
@@ -2302,6 +2330,33 @@ export class ChatService {
       user: await this.displayName(userId),
     });
     return { roomId: invite.roomId, alreadyJoined: false, systemMessage };
+  }
+
+  /** Gathers the inputs of `inviteKeepsOrganization` (cross-org-block.ts). */
+  private async assertInviteStaysInOrg(
+    userId: string,
+    roomId: string,
+    inviteCreatorId: string,
+  ): Promise<void> {
+    const [myOrgId, creatorOrgId, participants] = await Promise.all([
+      this.getUserOrganizationId(userId),
+      this.getUserOrganizationId(inviteCreatorId),
+      this.prisma.client.chatRoomParticipant.findMany({
+        where: { roomId },
+        select: { user: { select: { organizationId: true } } },
+      }),
+    ]);
+    const sameOrg = inviteKeepsOrganization({
+      joinerOrgId: myOrgId,
+      creatorOrgId,
+      participantOrgIds: participants.map((p) => p.user.organizationId),
+    });
+    if (!sameOrg) {
+      throw new ForbiddenException({
+        title: 'This invite is for another organization',
+        status: 403,
+      });
+    }
   }
 
   private async findActiveInvite(code: string) {
@@ -2402,7 +2457,13 @@ export class ChatService {
             image: p.user.image,
           },
         })),
-        lastMessage: r.messages[0] ? this.mapMessageRow(r.messages[0]) : null,
+        // Moderation needs to know a conversation exists and who is in it, not
+        // what was said. DMs, groups and private channels list without their
+        // last message; a public channel keeps it (its workspace can read it).
+        lastMessage:
+          r.messages[0] && r.workspaceId !== null && !r.isPrivate
+            ? this.mapMessageRow(r.messages[0])
+            : null,
         unreadCount: 0,
       })),
     };
@@ -2709,6 +2770,7 @@ export class ChatService {
    * "(edited)" marker. Attachments are immutable here.
    */
   async editMessage(userId: string, messageId: string, content: string): Promise<ChatRoomMessage> {
+    assertNotReservedContent(content);
     const message = await this.prisma.client.chatRoomMessage.findFirst({
       where: { id: messageId, deletedAt: null },
       select: { id: true, roomId: true, senderId: true },
@@ -2789,11 +2851,20 @@ export class ChatService {
         status: 403,
       });
     }
-    // Preserve the order the caller selected the messages in.
+    // Preserve the order the caller selected the messages in. Call logs and
+    // membership events describe what happened in THEIR room; copied into
+    // another room they would be forged events there, so they are skipped.
+    // Share cards are content (built by the server) and forward normally.
     const byId = new Map(sources.map((s) => [s.id, s]));
     const ordered = messageIds
       .map((id) => byId.get(id))
-      .filter((s): s is NonNullable<typeof s> => !!s);
+      .filter((s): s is NonNullable<typeof s> => !!s && !isRoomEventContent(s.content));
+    if (ordered.length === 0) {
+      throw new BadRequestException({
+        title: 'Call logs and member updates cannot be forwarded',
+        status: 400,
+      });
+    }
 
     // All creates go out as one batched transaction instead of one awaited
     // round-trip per message (nested attachment writes + includes rule out
