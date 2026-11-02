@@ -8,6 +8,7 @@
     "pnpm": ">=9.0.0"
   },
   "scripts": {
+    "quickstart": "node scripts/quickstart.mjs",
     "build": "turbo run build --concurrency=4",
     "dev": "cross-env NODE_OPTIONS=\"--max-old-space-size=8192\" turbo run dev --concurrency=10",
     "start": "turbo run start --concurrency=4",

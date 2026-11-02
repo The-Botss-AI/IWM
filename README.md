@@ -88,30 +88,96 @@ docker-compose.yml  Local Postgres, Redis, MinIO, Gotenberg, LiveKit
 
 ## 4. Quick start
 
-1. Clone the repository and enter it.
+Make sure Docker Desktop (or the Docker engine) is running, then:
+
+```bash
+git clone <your-fork-or-this-repo-url> iwm
+cd iwm
+corepack enable
+pnpm install
+pnpm quickstart
+pnpm dev
+```
+
+Open http://localhost:3000 and sign in.
+
+| Email               | Password              |
+| ------------------- | --------------------- |
+| `admin@example.com` | `demo-admin-password` |
+
+This account is for local development only. Change the password or delete the account before any real use.
+
+`pnpm quickstart` works the same on Windows, macOS and Linux. It:
+
+- checks your Node version and that Docker is running,
+- creates `.env` and `apps/web/.env.local` from the examples (it never overwrites existing files),
+- generates `BETTER_AUTH_SECRET` and `MAIL_ENCRYPTION_KEY` if they are blank or still the placeholder,
+- starts the Docker services and waits for Postgres and Redis,
+- creates the database schema and seeds the demo data.
+
+If a step fails it says what to fix. Run it again afterwards and it skips what is already done. Use `npm`/`yarn` and you will get errors: this repo uses pnpm only.
+
+To run one app only: `pnpm dev --filter=@botss/web` or `pnpm dev --filter=@botss/api` (API at http://localhost:4000/api/v1).
+
+### Set up with an AI coding agent
+
+Copy the prompt below into any AI coding agent or chat assistant (Claude Code, Cursor, Copilot, ChatGPT and so on). An agent that can run commands will do the setup for you. A chat assistant will give you the commands for your operating system to run yourself.
+
+```text
+Help me run IWM, an open-source TypeScript monorepo (NestJS API, Next.js web app, pnpm workspaces, Turborepo), on my computer for local development.
+
+If you can run terminal commands, run the steps yourself from the repository root and show me the output of each one. If you cannot, give me the exact commands for my operating system one step at a time and wait for me to paste the output before you continue. If you don't know my operating system, ask me first.
+
+Requirements:
+- Node.js 22.12 or newer (check with `node -v`)
+- pnpm 9 (enable with `corepack enable`; the repo pins pnpm 9.15.9)
+- Docker Desktop or the Docker engine, installed and running (check with `docker info`)
+
+Steps:
+1. If the repository is not cloned yet, ask me for its URL, clone it and enter the folder.
+2. Run `corepack enable`, then `pnpm install`.
+3. Run `pnpm quickstart`. It checks the requirements, creates `.env` and `apps/web/.env.local` with generated secrets, starts Postgres, Redis, MinIO, Gotenberg and LiveKit with Docker Compose, creates the database schema and seeds a demo admin. If it stops, it prints what to fix; fix that, then run it again.
+4. Run `pnpm dev`. It keeps running, so start it in the background or in a separate terminal.
+5. Confirm http://localhost:3000 loads and http://localhost:4000/api/v1 answers. The demo login is admin@example.com / demo-admin-password.
+
+Rules:
+- Use pnpm only. Never run `npm install` or `yarn`.
+- Never overwrite an existing `.env` or `apps/web/.env.local`, and never change an existing MAIL_ENCRYPTION_KEY (it encrypts stored mail passwords).
+- Don't edit source code or docker-compose.yml to get past an error. Tell me what is wrong and ask before changing anything except the env files.
+- If something fails, read README.md, especially the "Troubleshooting" table under "Quick start", then explain the cause in plain words and the fix.
+
+When it is running, tell me the URL to open, the demo login, and how to stop everything (Ctrl+C for `pnpm dev`, then `docker compose stop`).
+```
+
+### Manual setup
+
+The same steps by hand, if you prefer to see each one or use your own PostgreSQL and Redis.
+
+1. Install dependencies.
 
    ```bash
-   git clone <your-fork-or-this-repo-url> iwm
-   cd iwm
    corepack enable
-   ```
-
-2. Install dependencies.
-
-   ```bash
    pnpm install
    ```
 
-3. Copy the env files.
+2. Copy the env files.
 
    ```bash
    cp .env.example .env
    cp apps/web/.env.example apps/web/.env.local
    ```
 
-   Edit `.env` and set at least `BETTER_AUTH_SECRET` and `MAIL_ENCRYPTION_KEY` (each: `openssl rand -hex 32`). Everything else is optional; see [Configuration](#5-configuration).
+   On Windows PowerShell use `Copy-Item` instead of `cp`.
 
-4. Start Postgres, Redis, MinIO, Gotenberg and LiveKit.
+   Edit `.env` and set `BETTER_AUTH_SECRET` and `MAIL_ENCRYPTION_KEY` to two different 64-character hex strings. Generate each with `openssl rand -hex 32`, or, where `openssl` is not installed (Windows):
+
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+   ```
+
+   Everything else is optional; see [Configuration](#5-configuration).
+
+3. Start Postgres, Redis, MinIO, Gotenberg and LiveKit.
 
    ```bash
    docker compose up -d
@@ -119,13 +185,13 @@ docker-compose.yml  Local Postgres, Redis, MinIO, Gotenberg, LiveKit
 
    The compose credentials are development defaults, so change them before exposing a host. On first start the compose file installs `pg_trgm`. If you use your own PostgreSQL instead, run `CREATE EXTENSION IF NOT EXISTS pg_trgm;` in your database and in `template1` (Prisma's shadow database) before creating the schema.
 
-5. Create the schema.
+4. Create the schema.
 
    ```bash
    pnpm db:migrate --name init
    ```
 
-6. Seed demo data (idempotent, refuses to run in production).
+5. Seed demo data (idempotent, refuses to run in production).
 
    ```bash
    pnpm db:seed:dev
@@ -133,21 +199,22 @@ docker-compose.yml  Local Postgres, Redis, MinIO, Gotenberg, LiveKit
 
    The seed creates the root platform organization, a demo organization, a workspace, a sample project and one admin.
 
-7. Run everything.
+6. Run everything with `pnpm dev` and sign in as above.
 
-   ```bash
-   pnpm dev
-   ```
+### Troubleshooting
 
-8. Open http://localhost:3000 and sign in.
+When the API cannot start because of a setup problem it prints a short list of what to fix instead of a stack trace.
 
-   | Email               | Password              |
-   | ------------------- | --------------------- |
-   | `admin@example.com` | `demo-admin-password` |
-
-   This account is for local development only. Change the password or delete the account before any real use.
-
-To run one app only: `pnpm dev --filter=@botss/web` or `pnpm dev --filter=@botss/api` (API at http://localhost:4000/api/v1).
+| Problem                                                                 | Fix                                                                                                                                                           |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BETTER_AUTH_SECRET is not set` or `still the placeholder`              | Run `pnpm quickstart`, or set it in `.env` as in Manual setup step 2.                                                                                         |
+| `MAIL_ENCRYPTION_KEY is not set` or `must be exactly 64 hex characters` | Same as above. On an install that already has mail accounts, do not change an existing key.                                                                   |
+| `PostgreSQL is not reachable` / `Redis is not reachable`                | Start Docker Desktop, then `docker compose up -d`. Check `docker compose ps` shows the containers as healthy.                                                 |
+| `Docker is installed but not running`                                   | Start Docker Desktop and wait until the engine is running.                                                                                                    |
+| `docker compose up` fails with "port is already allocated"              | Another program uses one of 5433, 6380, 9100, 9101, 3100, 7880-7882. Stop it, or change the host port in `docker-compose.yml` and the matching URL in `.env`. |
+| `Node ... is too old`                                                   | Install Node 22.12 or newer.                                                                                                                                  |
+| Errors after running `npm install`                                      | Delete `node_modules` and `package-lock.json`, then `pnpm install`. The repo uses pnpm workspaces only.                                                       |
+| Sign-in fails with the demo account                                     | The seed did not run. Run `pnpm db:seed:dev` (or `pnpm quickstart`).                                                                                          |
 
 ## 5. Configuration
 
@@ -374,6 +441,7 @@ Each folder in `apps/api/invoice-templates/` is one invoice design: `template.ht
 ## 10. Common commands
 
 ```bash
+pnpm quickstart           # first-time local setup (env files, Docker services, schema, demo data)
 pnpm dev                  # run all apps (add --filter=@botss/web or @botss/api for one)
 pnpm build                # production builds
 pnpm start                # run built apps (start:api, start:web for one)
