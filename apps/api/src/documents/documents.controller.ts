@@ -27,6 +27,7 @@ import { CurrentWorkspaceId } from '../common/decorators/current-workspace.decor
 import { RequireAbility } from '../common/decorators/required-ability.decorator';
 import { CurrentSalesActor, type SalesActor } from '../common/decorators/sales-actor.decorator';
 import type { RequestExtensions } from '../common/guards/auth.guard';
+import { requestRoleForAdminChecks } from '../common/permissions/effective-permissions';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { DocumentsService, type DocumentAccessContext } from './documents.service';
 
@@ -37,8 +38,8 @@ function ctxOf(
   workspaceId: string,
   userId: string,
 ): DocumentAccessContext {
-  const role = (req.workspaceMemberships ?? []).find((m) => m.workspaceId === workspaceId)?.role;
-  return { userId, workspaceRole: role };
+  // OWNER / ADMIN only with every workspace permission (see adminCheckedRole).
+  return { userId, workspaceRole: requestRoleForAdminChecks(req, workspaceId) };
 }
 
 @Controller('documents')

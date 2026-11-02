@@ -35,6 +35,7 @@ import { AuditLogService } from '../audit-log/audit-log.service';
 import { SecurityAlertsService } from '../security-alerts/security-alerts.service';
 import { inviteLinkVisible, presetGrantCheckNeeded } from './invite-link-policy';
 import {
+  adminCheckedRole,
   loadEffectivePermissions,
   userHasCompanyPermission,
 } from '../common/permissions/effective-permissions';
@@ -808,13 +809,16 @@ export class WorkspacesService {
    * sees of a project).
    */
   async canAdminister(workspaceId: string, userId: string): Promise<boolean> {
-    try {
-      const role = await this.getActorRoleOrThrow(workspaceId, userId);
-      return role === 'OWNER' || role === 'ADMIN';
-    } catch (err) {
-      if (err instanceof ForbiddenException) return false;
-      throw err;
-    }
+    // An org admin administers every workspace of their organization.
+    if (await this.isOrgAdminFor(workspaceId, userId)) return true;
+    const membership = await orgWorkspaceMembership(this.prisma, userId, workspaceId);
+    if (!membership) return false;
+    // Base OWNER / ADMIN counts only with every workspace permission: under a
+    // narrower custom role (or a denying override) it no longer decides what
+    // a client sees (see adminCheckedRole).
+    const effective = await loadEffectivePermissions(userId, workspaceId);
+    const role = adminCheckedRole(membership.role, effective);
+    return role === 'OWNER' || role === 'ADMIN';
   }
 
   /**
