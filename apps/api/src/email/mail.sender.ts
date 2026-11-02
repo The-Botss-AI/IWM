@@ -191,10 +191,12 @@ export class MailSender {
    */
   async send(args: MailSendArgs): Promise<MailSendOutcome> {
     if (!this.transporter) {
+      // The body carries live invitation, password and signing links. Print
+      // it for local development only; a production log must never hold a
+      // working link.
+      const body = process.env.NODE_ENV === 'production' ? '(body not logged)' : args.text;
       // eslint-disable-next-line no-console
-      console.log(
-        `[MAIL_STUB] to=${args.to} subject=${JSON.stringify(args.subject)}\n${args.text}`,
-      );
+      console.log(`[MAIL_STUB] to=${args.to} subject=${JSON.stringify(args.subject)}\n${body}`);
       throw new MailSendError('No SMTP transport configured (STUB mode)', { transient: false });
     }
     try {
