@@ -31,6 +31,7 @@ import {
 
 import type { RequestExtensions } from '../common/guards/auth.guard';
 import { requestPermissions } from '../common/permissions/effective-permissions';
+import { SkipPermissions } from '../common/decorators/skip-permissions.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { RolesService, type RolesActor } from './roles.service';
 
@@ -39,6 +40,7 @@ import { RolesService, type RolesActor } from './roles.service';
  * `roles.manage` (company) or `members.manage` (active workspace) itself,
  * because the guardrails depend on WHICH permissions are being handed out.
  */
+@SkipPermissions()
 @Controller('roles')
 export class RolesController {
   constructor(private readonly roles: RolesService) {}
