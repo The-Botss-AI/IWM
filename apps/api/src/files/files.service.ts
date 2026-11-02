@@ -76,6 +76,33 @@ export function generalFileVisibility(financeAccess: boolean): Prisma.FileObject
   };
 }
 
+function createS3Client(endpoint: string): S3Client {
+  return new S3Client({
+    // Path-style addressing keeps MinIO + R2 happy with a single config; the
+    // virtual-host style requires DNS routing that local dev doesn't have.
+    endpoint,
+    region: process.env.S3_REGION ?? 'us-east-1',
+    credentials: {
+      accessKeyId: process.env.S3_ACCESS_KEY_ID ?? 'botss-local',
+      secretAccessKey: process.env.S3_SECRET_ACCESS_KEY ?? 'botss-local-secret',
+    },
+    forcePathStyle: (process.env.S3_FORCE_PATH_STYLE ?? 'true') !== 'false',
+    // AWS SDK v3 (>=3.729) auto-injects an `x-amz-checksum-crc32` query
+    // parameter into presigned PUT URLs, computed from the request body
+    // at sign time. Presigned URLs are signed BEFORE the actual upload,
+    // so the SDK computes `CRC32(<empty>)` = `AAAAAA==`. Then the browser
+    // PUTs the real bytes and MinIO/R2 rejects with HTTP 400 because the
+    // observed checksum doesn't match the one embedded in the URL.
+    //
+    // Pinning `requestChecksumCalculation` to `WHEN_REQUIRED` opts out
+    // of the new auto-checksum behaviour for ops that don't explicitly
+    // ask for one. Voice-note + image + arbitrary file uploads start
+    // working again.
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
+  });
+}
+
 /**
  * File metadata + presigned upload flow against an S3-compatible store.
  * Locally that's MinIO on `S3_ENDPOINT`; in production it's Cloudflare R2.
@@ -98,6 +125,8 @@ export function generalFileVisibility(financeAccess: boolean): Prisma.FileObject
 export class FilesService {
   private readonly logger = new Logger(FilesService.name);
   private readonly s3: S3Client;
+  /** Signs browser upload URLs when `S3_PRESIGN_ENDPOINT` is set, else null. */
+  private readonly presignS3: S3Client | null;
   private readonly bucket: string;
   private readonly endpoint: string;
   /** When true, the public URL keeps `/<bucket>/` in the path. When
@@ -113,30 +142,14 @@ export class FilesService {
     // should set this to `false` explicitly.
     this.publicUrlIncludesBucket =
       (process.env.S3_PUBLIC_URL_INCLUDES_BUCKET ?? 'true').toLowerCase() !== 'false';
-    this.s3 = new S3Client({
-      // Path-style addressing keeps MinIO + R2 happy with a single config; the
-      // virtual-host style requires DNS routing that local dev doesn't have.
-      endpoint: this.endpoint,
-      region: process.env.S3_REGION ?? 'us-east-1',
-      credentials: {
-        accessKeyId: process.env.S3_ACCESS_KEY_ID ?? 'botss-local',
-        secretAccessKey: process.env.S3_SECRET_ACCESS_KEY ?? 'botss-local-secret',
-      },
-      forcePathStyle: (process.env.S3_FORCE_PATH_STYLE ?? 'true') !== 'false',
-      // AWS SDK v3 (>=3.729) auto-injects an `x-amz-checksum-crc32` query
-      // parameter into presigned PUT URLs, computed from the request body
-      // at sign time. Presigned URLs are signed BEFORE the actual upload,
-      // so the SDK computes `CRC32(<empty>)` = `AAAAAA==`. Then the browser
-      // PUTs the real bytes and MinIO/R2 rejects with HTTP 400 because the
-      // observed checksum doesn't match the one embedded in the URL.
-      //
-      // Pinning `requestChecksumCalculation` to `WHEN_REQUIRED` opts out
-      // of the new auto-checksum behaviour for ops that don't explicitly
-      // ask for one. Voice-note + image + arbitrary file uploads start
-      // working again.
-      requestChecksumCalculation: 'WHEN_REQUIRED',
-      responseChecksumValidation: 'WHEN_REQUIRED',
-    });
+    this.s3 = createS3Client(this.endpoint);
+    // A presigned URL signs the Host header, so it only works on the host it
+    // was signed for. When the API reaches storage on a different host than
+    // browsers do (Docker: `minio:9000` inside, `localhost:9100` outside),
+    // sign uploads for the browser's host. Signing is local, no request is
+    // made to this endpoint.
+    const presignEndpoint = process.env.S3_PRESIGN_ENDPOINT?.trim();
+    this.presignS3 = presignEndpoint ? createS3Client(presignEndpoint) : null;
   }
 
   /**
@@ -240,10 +253,10 @@ export class FilesService {
         ContentLength: input.sizeBytes,
         ContentDisposition: contentDisposition,
       });
-      let uploadUrl = await getSignedUrl(this.s3, command, { expiresIn });
+      let uploadUrl = await getSignedUrl(this.presignS3 ?? this.s3, command, { expiresIn });
 
       // If a public URL is configured, rewrite the upload URL host so the client uploads to the public endpoint
-      if (process.env.S3_PUBLIC_URL) {
+      if (!this.presignS3 && process.env.S3_PUBLIC_URL) {
         const publicUrlBase = process.env.S3_PUBLIC_URL.replace(/\/+$/, '');
         const internalUrlBase = this.endpoint.replace(/\/+$/, '');
         uploadUrl = uploadUrl.replace(internalUrlBase, publicUrlBase);

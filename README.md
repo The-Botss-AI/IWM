@@ -74,15 +74,16 @@ packages/
   api-client/    Typed SDK the frontends use to call the API
   auth/          Better Auth config and CASL abilities
   config/        Shared eslint, tsconfig and tailwind preset
-docker/          Postgres init script (pg_trgm)
-docker-compose.yml  Local Postgres, Redis, MinIO, Gotenberg, LiveKit
+docker/          Postgres init script (pg_trgm), Docker entrypoints for the app image
+docker-compose.yml  Local Postgres, Redis, MinIO, Gotenberg, LiveKit; IWM itself with --profile app
+Dockerfile       App image for the API, the web app and database setup
 ```
 
 ## 3. Requirements
 
 - Node.js 22.12 or newer
 - pnpm 9 (enable it with `corepack enable`; the repo pins `pnpm@9.15.9`)
-- Docker, for the local services
+- Docker, for the local services (Compose 2.24 or newer)
 - PostgreSQL 16 with the `pg_trgm` extension (the compose file handles this)
 - Redis 7
 
@@ -118,6 +119,35 @@ This account is for local development only. Change the password or delete the ac
 If a step fails it says what to fix. Run it again afterwards and it skips what is already done. Use `npm`/`yarn` and you will get errors: this repo uses pnpm only.
 
 To run one app only: `pnpm dev --filter=@botss/web` or `pnpm dev --filter=@botss/api` (API at http://localhost:4000/api/v1).
+
+### Run everything in Docker
+
+No Node or pnpm needed, only Docker with Compose 2.24 or newer:
+
+```bash
+git clone <your-fork-or-this-repo-url> iwm
+cd iwm
+docker compose --profile app up -d --build
+```
+
+The first build takes several minutes. When `docker compose ps` shows `botss-web` as healthy, open http://localhost:3000 and sign in with the demo account above. Give Docker at least 8 GB of memory (Docker Desktop: Settings > Resources); the web build needs it.
+
+A `.env` is optional. Without one, the API generates `BETTER_AUTH_SECRET` and `MAIL_ENCRYPTION_KEY` on first start and keeps them in the `iwm-secrets` volume. To configure mail, calls or anything else, create `.env` from `.env.example` and set what you need; settings that point at the other services (database, Redis, MinIO, Gotenberg) are set by `docker-compose.yml` and override `.env`. `NEXT_PUBLIC_*` values are compiled into the web app, so after changing them rebuild with `--build`.
+
+| Task                              | Command                                        |
+| --------------------------------- | ---------------------------------------------- |
+| Follow the logs                   | `docker compose --profile app logs -f api web` |
+| Stop, keeping data                | `docker compose --profile app stop`            |
+| Update after `git pull`           | `docker compose --profile app up -d --build`   |
+| Start over, deleting all IWM data | `docker compose --profile app down -v`         |
+
+What happens on `up`: Postgres, Redis, MinIO and Gotenberg start, `minio-init` creates the uploads bucket, `db-setup` creates the schema and seeds the demo data (on a database with no users only), then the API (port 4000) and the web app (port 3000) start.
+
+Docker and `pnpm quickstart` share the same database and migration history, so you can switch between them. Stop the `app` containers before `pnpm dev` (both use ports 3000 and 4000). If you started with Docker and no `.env` and later move to `pnpm dev`, copy the generated secrets into `.env` first, or mailbox passwords saved under Docker cannot be decrypted:
+
+```bash
+docker compose exec api cat /secrets/better-auth-secret /secrets/mail-encryption-key
+```
 
 ### Set up with an AI coding agent
 
@@ -205,16 +235,20 @@ The same steps by hand, if you prefer to see each one or use your own PostgreSQL
 
 When the API cannot start because of a setup problem it prints a short list of what to fix instead of a stack trace.
 
-| Problem                                                                 | Fix                                                                                                                                                           |
-| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BETTER_AUTH_SECRET is not set` or `still the placeholder`              | Run `pnpm quickstart`, or set it in `.env` as in Manual setup step 2.                                                                                         |
-| `MAIL_ENCRYPTION_KEY is not set` or `must be exactly 64 hex characters` | Same as above. On an install that already has mail accounts, do not change an existing key.                                                                   |
-| `PostgreSQL is not reachable` / `Redis is not reachable`                | Start Docker Desktop, then `docker compose up -d`. Check `docker compose ps` shows the containers as healthy.                                                 |
-| `Docker is installed but not running`                                   | Start Docker Desktop and wait until the engine is running.                                                                                                    |
-| `docker compose up` fails with "port is already allocated"              | Another program uses one of 5433, 6380, 9100, 9101, 3100, 7880-7882. Stop it, or change the host port in `docker-compose.yml` and the matching URL in `.env`. |
-| `Node ... is too old`                                                   | Install Node 22.12 or newer.                                                                                                                                  |
-| Errors after running `npm install`                                      | Delete `node_modules` and `package-lock.json`, then `pnpm install`. The repo uses pnpm workspaces only.                                                       |
-| Sign-in fails with the demo account                                     | The seed did not run. Run `pnpm db:seed:dev` (or `pnpm quickstart`).                                                                                          |
+| Problem                                                                 | Fix                                                                                                                                                                                           |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BETTER_AUTH_SECRET is not set` or `still the placeholder`              | Run `pnpm quickstart`, or set it in `.env` as in Manual setup step 2.                                                                                                                         |
+| `MAIL_ENCRYPTION_KEY is not set` or `must be exactly 64 hex characters` | Same as above. On an install that already has mail accounts, do not change an existing key.                                                                                                   |
+| `PostgreSQL is not reachable` / `Redis is not reachable`                | Start Docker Desktop, then `docker compose up -d`. Check `docker compose ps` shows the containers as healthy.                                                                                 |
+| `Docker is installed but not running`                                   | Start Docker Desktop and wait until the engine is running.                                                                                                                                    |
+| `docker compose up` fails with "port is already allocated"              | Another program uses one of 5433, 6380, 9100, 9101, 3100, 7880-7882. Stop it, or change the host port in `docker-compose.yml` and the matching URL in `.env`.                                 |
+| `Node ... is too old`                                                   | Install Node 22.12 or newer.                                                                                                                                                                  |
+| Errors after running `npm install`                                      | Delete `node_modules` and `package-lock.json`, then `pnpm install`. The repo uses pnpm workspaces only.                                                                                       |
+| Sign-in fails with the demo account                                     | The seed did not run. Run `pnpm db:seed:dev` (or `pnpm quickstart`).                                                                                                                          |
+| Docker: `additional properties 'required' not allowed` or similar       | Your Docker Compose is older than 2.24. Update Docker Desktop or the compose plugin.                                                                                                          |
+| Docker: the build stops with exit code 137 or "killed"                  | Docker ran out of memory during the web build. Give it at least 8 GB (Docker Desktop: Settings > Resources) and run the command again.                                                        |
+| Docker: `db-setup` fails with "the database already has tables"         | The database was created elsewhere without local migrations. Restore `packages/database/prisma/migrations`, or start over with `docker compose --profile app down -v` (deletes all IWM data). |
+| Docker: `port is already allocated` for 3000 or 4000                    | `pnpm dev` or another app is using the port. Stop it, then run the command again.                                                                                                             |
 
 ## 5. Configuration
 
@@ -326,6 +360,7 @@ Never put real secrets in the example files or in git. In production, pass them 
 | `S3_FORCE_PATH_STYLE`           | Optional | `true` for MinIO and R2's raw S3 API.                                                                                                                                              | `true`                      |
 | `S3_PUBLIC_URL`                 | Optional | Public base URL for files. Leave unset locally; set to your CDN host in production.                                                                                                | `https://files.example.com` |
 | `S3_PUBLIC_URL_INCLUDES_BUCKET` | Optional | `true` (default) builds `<host>/<bucket>/<key>`. `false` builds `<host>/<key>`, needed for a custom domain mapped to one R2 bucket. A wrong value shows up as files returning 404. | `false`                     |
+| `S3_PRESIGN_ENDPOINT`           | Optional | Endpoint browsers upload to when it differs from `S3_ENDPOINT`; upload URLs are signed for this host. The Docker setup sets it.                                                    | `http://localhost:9100`     |
 
 ### PDFs
 
@@ -442,6 +477,7 @@ Each folder in `apps/api/invoice-templates/` is one invoice design: `template.ht
 
 ```bash
 pnpm quickstart           # first-time local setup (env files, Docker services, schema, demo data)
+docker compose --profile app up -d --build   # or: run everything, IWM included, in Docker
 pnpm dev                  # run all apps (add --filter=@botss/web or @botss/api for one)
 pnpm build                # production builds
 pnpm start                # run built apps (start:api, start:web for one)
