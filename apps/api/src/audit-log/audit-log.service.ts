@@ -13,6 +13,7 @@ import { Prisma } from '@botss/database';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { userHasCompanyPermission } from '../common/permissions/effective-permissions';
+import { isSupportRequest } from '../common/request-context';
 import { userOrgId } from '../common/tenant-scope';
 
 import {
@@ -105,6 +106,11 @@ export class AuditLogService {
     actingUserId: string,
     query: ListAuditLogQuery,
   ): Promise<PlatformLogListResponse> {
+    // A support session runs as a guest of one organization, read only; it
+    // never reaches platform-level data (same rule as assertGlobalAdmin).
+    if (isSupportRequest()) {
+      throw new ForbiddenException({ title: 'Super admin only', status: 403 });
+    }
     const actor = await this.prisma.client.user.findUnique({
       where: { id: actingUserId },
       select: { systemRole: true },
