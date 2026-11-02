@@ -1359,8 +1359,7 @@ export class SignaturesService {
 
   /** Sign and decline cap: per IP for links, per person in the portal. */
   private async limitWrites(key: string): Promise<void> {
-    const count = await this.redis.client.incr(key);
-    if (count === 1) await this.redis.client.expire(key, 3600);
+    const count = await this.redis.hitWindow(key, 3600);
     if (count > MAX_PUBLIC_WRITES_PER_HOUR) {
       throw new HttpException(
         { title: 'Too many attempts', status: 429, detail: 'Please try again in an hour.' },
