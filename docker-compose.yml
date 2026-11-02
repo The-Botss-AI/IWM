@@ -1,6 +1,31 @@
 # Development / self-host infrastructure: Postgres, Redis, MinIO, Gotenberg and
 # LiveKit. The credentials below are local-development defaults that match the
 # API's fallbacks and .env.example: change all of them before exposing a host.
+#
+#   docker compose up -d                        services only (`pnpm quickstart` / `pnpm dev`)
+#   docker compose --profile app up -d --build  services plus IWM itself, see README
+#
+# The `app` profile builds one image (Dockerfile) for the API, the web app and
+# the database setup step. .env is optional for it: the API generates its
+# secrets on first start when .env does not set them.
+
+# Shared by every service that runs the IWM image. Compose reads .env (when it
+# exists) for the ${...} values; NEXT_PUBLIC_* are compiled into the web bundle.
+x-iwm-image: &iwm-image
+  image: iwm-app:local
+  build:
+    context: .
+    args:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+      NEXT_PUBLIC_API_BASE_PATH: ${NEXT_PUBLIC_API_BASE_PATH:-/api/v1}
+      NEXT_PUBLIC_WEB_URL: ${NEXT_PUBLIC_WEB_URL:-http://localhost:3000}
+      NEXT_PUBLIC_ADMIN_EMAIL: ${NEXT_PUBLIC_ADMIN_EMAIL:-admin@example.com}
+      NEXT_PUBLIC_VAPID_PUBLIC_KEY: ${NEXT_PUBLIC_VAPID_PUBLIC_KEY:-}
+      NEXT_PUBLIC_WEB_PUSH_VAPID_PUBLIC_KEY: ${NEXT_PUBLIC_WEB_PUSH_VAPID_PUBLIC_KEY:-}
+      NEXT_PUBLIC_CPANEL_DOMAIN: ${NEXT_PUBLIC_CPANEL_DOMAIN:-}
+      NEXT_PUBLIC_MAIL_DEFAULT_IMAP_HOST: ${NEXT_PUBLIC_MAIL_DEFAULT_IMAP_HOST:-}
+      NEXT_PUBLIC_MAIL_DEFAULT_SMTP_HOST: ${NEXT_PUBLIC_MAIL_DEFAULT_SMTP_HOST:-}
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -87,6 +112,123 @@ services:
     ports:
       - '127.0.0.1:3100:3000'
 
+  # Creates the uploads bucket and allows anonymous reads: stored file URLs
+  # are plain public URLs (see FilesService.presign). Runs once per `up` and
+  # exits; existing buckets and files are left alone. Retries until MinIO
+  # answers instead of depending on its healthcheck.
+  minio-init:
+    image: minio/mc:latest
+    container_name: botss-minio-init
+    restart: 'no'
+    depends_on:
+      - minio
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - |
+        tries=0
+        until mc alias set local http://minio:9000 botss-local botss-local-secret >/dev/null 2>&1; do
+          tries=$$((tries + 1))
+          [ "$$tries" -ge 60 ] && break
+          sleep 1
+        done
+        mc mb --ignore-existing local/botss-files && mc anonymous set download local/botss-files
+
+  # ── IWM itself: `docker compose --profile app up -d --build` ──────────────
+
+  # Schema and demo data, then exits. See docker/db-setup.mjs.
+  db-setup:
+    <<: *iwm-image
+    profiles: [app]
+    container_name: botss-db-setup
+    restart: 'no'
+    command: ['node', '/repo/docker/db-setup.mjs']
+    # Writes the init migration into the mounted host folder.
+    user: root
+    environment:
+      DATABASE_URL: postgresql://botss:botss@postgres:5432/botss?schema=public
+    volumes:
+      # Shares the gitignored migrations folder with `pnpm quickstart`.
+      - ./packages/database/prisma:/repo/packages/database/prisma
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *iwm-image
+    profiles: [app]
+    container_name: botss-api
+    restart: unless-stopped
+    working_dir: /repo/apps/api
+    command: ['node', '/repo/docker/api-start.mjs']
+    env_file:
+      - path: .env
+        required: false
+    # Inside a container `localhost` is that container: the API reaches the
+    # other services by name. These override the same keys from .env. Browser
+    # facing URLs (BETTER_AUTH_URL, WEB_ORIGIN, ...) keep their localhost
+    # defaults.
+    environment:
+      NODE_ENV: production
+      ROLE: all
+      API_PORT: '4000'
+      DATABASE_URL: postgresql://botss:botss@postgres:5432/botss?schema=public
+      REDIS_URL: redis://redis:6379
+      GOTENBERG_URL: http://gotenberg:3000
+      S3_ENDPOINT: http://minio:9000
+      # Browsers load and upload files through the published MinIO port.
+      S3_PUBLIC_URL: http://localhost:9100
+      S3_PRESIGN_ENDPOINT: http://localhost:9100
+    ports:
+      - '127.0.0.1:4000:4000'
+    volumes:
+      - iwm-secrets:/secrets
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4000${API_BASE_PATH:-/api/v1}/health/ready').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    depends_on:
+      db-setup:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      gotenberg:
+        condition: service_started
+
+  web:
+    <<: *iwm-image
+    profiles: [app]
+    container_name: botss-web
+    restart: unless-stopped
+    working_dir: /repo/apps/web
+    command: ['/repo/node_modules/.bin/next', 'start', '-p', '3000', '-H', '0.0.0.0']
+    environment:
+      # Server-side rendering of public pages reaches the API here; browsers
+      # use NEXT_PUBLIC_API_URL.
+      API_INTERNAL_URL: http://api:4000
+    ports:
+      - '127.0.0.1:3000:3000'
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/').then((r) => process.exit(r.status < 500 ? 0 : 1), () => process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      api:
+        condition: service_healthy
+
   livekit:
     image: livekit/livekit-server:latest
     container_name: botss-livekit
@@ -111,3 +253,6 @@ volumes:
   botss-postgres:
   botss-redis:
   botss-minio:
+  # Secrets the API generated because .env did not set them. Deleting this
+  # volume makes stored mailbox passwords unreadable.
+  iwm-secrets:

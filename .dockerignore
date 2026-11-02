@@ -1,0 +1,19 @@
+# Build context for the Dockerfile. Dependencies and build output are made
+# inside the image; env files must never be baked into it.
+**/node_modules
+**/.next
+**/dist
+**/.turbo
+**/*.tsbuildinfo
+.git
+.github
+
+# Env files: the API reads .env through compose `env_file`, never from the image.
+**/.env
+**/.env.*
+!**/.env.example
+
+# Local Prisma migrations stay on the host; db-setup mounts them.
+packages/database/prisma/migrations
+
+*.log

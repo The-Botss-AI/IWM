@@ -26,3 +26,46 @@ jobs:
       - run: pnpm install --frozen-lockfile # postinstall runs prisma generate
       - run: pnpm format:check
       - run: pnpm verify # typecheck + lint + test
+
+  # README "Run everything in Docker", as a new user runs it: no .env. Then
+  # signs in as the demo admin and uploads a file through a presigned URL.
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      # Returns once db-setup has finished and the API is healthy.
+      - run: docker compose --profile app up -d --build
+      - name: Wait for the web app
+        run: |
+          for _ in $(seq 1 60); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' botss-web)" = healthy ] && exit 0
+            sleep 5
+          done
+          echo "botss-web did not become healthy" && exit 1
+      - name: Sign in, presign an upload, upload and read it back
+        run: |
+          set -euo pipefail
+          api=http://localhost:4000
+          curl -fsS -o /dev/null http://localhost:3000/
+          curl -fsS -c jar -H 'Origin: http://localhost:3000' -H 'Content-Type: application/json' \
+            -d '{"email":"admin@example.com","password":"demo-admin-password"}' \
+            "$api/api/auth/sign-in/email" -o /dev/null
+          ws=$(curl -fsS -b jar "$api/api/v1/workspaces" \
+            | jq -r 'if type == "array" then .[0].id else (.items // .data)[0].id end')
+          echo 'hello from ci' > upload.txt
+          curl -fsS -b jar -H "X-Workspace-Id: $ws" -H 'Content-Type: application/json' \
+            -d '{"filename":"upload.txt","mimeType":"text/plain","sizeBytes":14}' \
+            "$api/api/v1/files/presign" > presign.json
+          url=$(jq -r .uploadUrl presign.json)
+          case "$url" in http://localhost:9100/*) ;; *) echo "unexpected upload host: $url"; exit 1 ;; esac
+          curl -fsS -X PUT -T upload.txt \
+            -H "Content-Type: $(jq -r '.headers["Content-Type"]' presign.json)" \
+            -H "Content-Disposition: $(jq -r '.headers["Content-Disposition"]' presign.json)" \
+            "$url"
+          curl -fsS "http://localhost:9100/botss-files/$(jq -r .objectKey presign.json)" | grep -q 'hello from ci'
+      - name: Logs
+        if: failure()
+        run: docker compose --profile app logs --no-color
+      - if: always()
+        run: docker compose --profile app down -v
