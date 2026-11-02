@@ -21,6 +21,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { SearchResult } from '@botss/shared-types';
 
 import { getApi } from '@/lib/api';
+import { loadRecent, pushRecent, type RecentItem } from '@/lib/command-palette-recents';
 import { useDebouncedValue } from '@/hooks/use-debounced';
 import { useSalesAccess } from '@/hooks/use-sales-access';
 import { hasSearchModifiers } from '@/lib/search-query';
@@ -267,34 +268,6 @@ export function CommandPalette() {
       ) : null}
     </>
   );
-}
-
-interface RecentItem {
-  kind: SearchResult['kind'] | 'nav';
-  title: string;
-  context?: string | null;
-  href: string;
-}
-
-const RECENT_KEY = 'botss:command-palette:recent';
-function loadRecent(): RecentItem[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = window.localStorage.getItem(RECENT_KEY);
-    return raw ? (JSON.parse(raw) as RecentItem[]) : [];
-  } catch {
-    return [];
-  }
-}
-function pushRecent(item: RecentItem): void {
-  if (typeof window === 'undefined') return;
-  const curr = loadRecent().filter((r) => r.href !== item.href);
-  const next = [item, ...curr].slice(0, 5);
-  try {
-    window.localStorage.setItem(RECENT_KEY, JSON.stringify(next));
-  } catch {
-    /* localStorage may be unavailable; silently drop */
-  }
 }
 
 function iconFor(kind: RecentItem['kind']): React.ReactNode {

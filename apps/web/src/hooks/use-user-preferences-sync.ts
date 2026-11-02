@@ -23,6 +23,8 @@ import {
   getAppAppearance,
   replaceAppAppearance,
 } from '@/lib/app-prefs';
+import { clearRecent } from '@/lib/command-palette-recents';
+import { claimInAppNotificationsFor } from '@/lib/in-app-notifications';
 import { sessionQueryOptions } from '@/lib/session-query';
 import { toastError } from '@/lib/toast';
 import {
@@ -121,9 +123,13 @@ export function useUserPreferencesSync(): void {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const failures = useRef(0);
 
-  // Bind the device cache to this user before anything is reconciled.
+  // Bind the device cache to this user before anything is reconciled. A
+  // different person signing in also loses the previous one's notification
+  // previews and recent palette titles.
   useEffect(() => {
-    if (userId) claimAppearanceFor(userId);
+    if (!userId) return;
+    claimAppearanceFor(userId);
+    if (claimInAppNotificationsFor(userId)) clearRecent();
   }, [userId]);
 
   // Collect user-initiated edits and save them.

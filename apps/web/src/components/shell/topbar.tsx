@@ -34,7 +34,7 @@ import { authClient } from '@/lib/auth-client';
 import { clearAllInAppNotifications } from '@/lib/in-app-notifications';
 import { useSessionContext } from '@/components/auth/session-gate';
 import { useCurrentWorkspace } from '@/hooks/use-workspace';
-import { useDesktopNotifications } from '@/hooks/use-desktop-notifications';
+import { unsubscribeWebPush, useDesktopNotifications } from '@/hooks/use-desktop-notifications';
 import { useNavPrefs } from '@/hooks/use-nav-prefs';
 import { useActiveSupportSession } from '@/hooks/use-support-access';
 import { usePermissions } from '@/hooks/use-permissions';
@@ -78,9 +78,10 @@ export function TopBar() {
   const queryClient = useQueryClient();
 
   const onSignOut = async () => {
-    // Stop this device receiving the signed-out user's native push, then end
-    // the session. Best-effort - never block sign-out on it.
+    // Stop this device receiving the signed-out user's native and browser
+    // push, then end the session. Best-effort - never block sign-out on it.
     await unregisterNativePush().catch(() => undefined);
+    await unsubscribeWebPush();
     try {
       const res = await authClient.signOut();
       // 400/401 mean the session is already gone - carry on signing out.
