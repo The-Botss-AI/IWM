@@ -59,6 +59,11 @@ jobs:
             "$api/api/v1/files/presign" > presign.json
           url=$(jq -r .uploadUrl presign.json)
           case "$url" in http://localhost:9100/*) ;; *) echo "unexpected upload host: $url"; exit 1 ;; esac
+          # Browsers upload cross-origin from the web app: MinIO must allow it.
+          curl -fsS -o /dev/null -D cors.txt -X OPTIONS -H 'Origin: http://localhost:3000' \
+            -H 'Access-Control-Request-Method: PUT' \
+            -H 'Access-Control-Request-Headers: content-type,content-disposition' "$url"
+          grep -qi '^access-control-allow-origin: http://localhost:3000' cors.txt
           curl -fsS -X PUT -T upload.txt \
             -H "Content-Type: $(jq -r '.headers["Content-Type"]' presign.json)" \
             -H "Content-Disposition: $(jq -r '.headers["Content-Disposition"]' presign.json)" \

@@ -69,9 +69,15 @@ services:
       retries: 10
 
   minio:
-    image: minio/minio:latest
+    # MinIO no longer publishes images (minio/minio is gone from Docker Hub).
+    # Chainguard rebuilds the same server from source; its free tier ships
+    # `latest` only. Distroless: no shell or curl, so no healthcheck here.
+    image: chainguard/minio:latest
     container_name: botss-minio
     restart: unless-stopped
+    # The image runs as uid 65532; volumes made by the old minio/minio image
+    # (and new empty ones) are owned by root. Root, as the old image ran.
+    user: '0'
     command: server /data --console-address ':9001'
     environment:
       MINIO_ROOT_USER: botss-local
@@ -89,11 +95,6 @@ services:
       - '127.0.0.1:9101:9001'
     volumes:
       - botss-minio:/data
-    healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
-      interval: 10s
-      timeout: 5s
-      retries: 10
 
   # HTML to PDF for invoices. Headless Chromium in its own container so a
   # render can never take the API process down. JavaScript is disabled and
@@ -114,24 +115,30 @@ services:
 
   # Creates the uploads bucket and allows anonymous reads: stored file URLs
   # are plain public URLs (see FilesService.presign). Runs once per `up` and
-  # exits; existing buckets and files are left alone. Retries until MinIO
-  # answers instead of depending on its healthcheck.
+  # exits; existing buckets and files are left alone. Plain S3 API calls, so
+  # it works against any S3-compatible server. Retries until MinIO answers.
   minio-init:
-    image: minio/mc:latest
+    image: amazon/aws-cli:latest
     container_name: botss-minio-init
     restart: 'no'
     depends_on:
       - minio
+    environment:
+      AWS_ACCESS_KEY_ID: botss-local
+      AWS_SECRET_ACCESS_KEY: botss-local-secret
+      AWS_DEFAULT_REGION: us-east-1
     entrypoint: ['/bin/sh', '-c']
     command:
       - |
+        s3() { aws --endpoint-url http://minio:9000 s3api "$$@"; }
         tries=0
-        until mc alias set local http://minio:9000 botss-local botss-local-secret >/dev/null 2>&1; do
+        until s3 list-buckets >/dev/null 2>&1; do
           tries=$$((tries + 1))
           [ "$$tries" -ge 60 ] && break
           sleep 1
         done
-        mc mb --ignore-existing local/botss-files && mc anonymous set download local/botss-files
+        s3 head-bucket --bucket botss-files >/dev/null 2>&1 || s3 create-bucket --bucket botss-files || exit 1
+        s3 put-bucket-policy --bucket botss-files --policy '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::botss-files/*"]}]}'
 
   # ── IWM itself: `docker compose --profile app up -d --build` ──────────────
 
