@@ -229,7 +229,7 @@ Never put real secrets in the example files or in git. In production, pass them 
 | `DATABASE_URL`                 | Required | PostgreSQL connection string. In production add `connection_limit` so all API processes stay under Postgres `max_connections` (at least 10).    | `postgresql://botss:botss@localhost:5433/botss?schema=public` |
 | `REDIS_URL`                    | Required | Redis for cache, queues, presence.                                                                                                              | `redis://localhost:6380`                                      |
 | `PUBLIC_APP_URL`               | Required | Public web URL, used to build invitation and reset links. No trailing slash.                                                                    | `https://app.example.com`                                     |
-| `BETTER_AUTH_SECRET`           | Required | Secret for sessions.                                                                                                                            | output of `openssl rand -hex 32`                              |
+| `BETTER_AUTH_SECRET`           | Required | Secret for sessions. In production the API refuses to start with fewer than 32 characters.                                                      | output of `openssl rand -hex 32`                              |
 | `BETTER_AUTH_URL`              | Required | Public URL of the API as browsers see it. Use HTTPS in production so cookies can be Secure.                                                     | `https://api.example.com`                                     |
 | `AUTH_COOKIE_DOMAIN`           | Optional | Parent domain for the session cookie when API and web are on different subdomains. Leave blank locally.                                         | `.example.com`                                                |
 | `AUTH_COOKIE_PREFIX`           | Optional | Session cookie name prefix. Leave blank in production (changing it signs everyone out). Set it for a staging install on the same parent domain. | `iwm-staging`                                                 |
@@ -480,8 +480,10 @@ This is the first public release of software that grew inside one company's depl
 - **Support access with time-limited grants.** An organization admin can grant platform support a scoped, time-limited window into their organization, and revoke it at any time.
 - **Audit log and platform log.** Each organization can read its own audit log, including support actions. Platform-level events go to a separate platform log.
 - **Security alerts.** Bursts of failed sign-ins, mass deletes and very large imports or exports raise alerts in the affected organization's audit log and the platform log. Alerts carry counts and ids only, never content.
-- **Permissions are enforced on the server** with NestJS guards and CASL. The frontend uses the same abilities only to hide what a user cannot do.
-- **Secrets and sessions.** Secrets come from the environment. Mail credentials are encrypted at rest with `MAIL_ENCRYPTION_KEY`. The Devices page lists every session and can sign any of them out.
+- **Permissions are enforced on the server** with NestJS guards and CASL. The frontend uses the same abilities only to hide what a user cannot do. Every route declares how it is authorized (`@RequireAbility`, `@SkipPermissions` when the service checks, `@Public` or `@PortalRoute`); a route that declares nothing is refused, and `pnpm test` fails on one (`check-route-permissions.ts`).
+- **Realtime.** The chat socket refuses handshakes from origins outside `WEB_ORIGIN`, WebSocket included, so another website cannot open a signed-in socket with a visitor's cookie.
+- **Secrets and sessions.** Secrets come from the environment. Mail credentials are encrypted at rest with `MAIL_ENCRYPTION_KEY`. Invitation and portal link tokens are stored only as hashes. The Devices page lists every session and can sign any of them out; suspending or archiving an organization signs its people out.
+- **Platform email** (invitations, password links, signing links) goes only through the organization's own mail settings or the `SMTP_*` transport, never through a mailbox a user added.
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
