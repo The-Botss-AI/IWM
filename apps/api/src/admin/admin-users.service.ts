@@ -14,7 +14,11 @@ import type {
   WebmailCandidate,
 } from '@botss/shared-types';
 
-import { assertMayAdministerUser, assertSameOrg } from './admin-user-policy';
+import {
+  assertMayAdministerUser,
+  assertMayGrantWorkspaceRole,
+  assertSameOrg,
+} from './admin-user-policy';
 import { SessionsService } from '../sessions/sessions.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { SecurityAlertsService } from '../security-alerts/security-alerts.service';
@@ -251,6 +255,12 @@ export class AdminUsersService {
           'HR may create Employee, Project manager, or HR accounts. Admin and Super admin accounts need an admin to create them.',
       });
     }
+    // The same limit for the workspace role (an OWNER / ADMIN membership is
+    // `manage all` in that workspace).
+    assertMayGrantWorkspaceRole(
+      input.workspaceRole,
+      await userHasCompanyPermission(actingUserId, 'users.manage'),
+    );
     const targetOrgId = actor?.organizationId ?? null;
     if (!targetOrgId) {
       throw new ForbiddenException({
