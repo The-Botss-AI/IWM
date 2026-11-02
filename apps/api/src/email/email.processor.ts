@@ -2,11 +2,8 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Inject, Logger, Optional } from '@nestjs/common';
 import { UnrecoverableError, type Job } from 'bullmq';
 
-import { MailCryptoService } from '../mail/mail-crypto.service';
-import { MailSendService } from '../mail/mail-send.service';
 import { FilesService } from '../files/files.service';
 import { OrganizationsService } from '../organizations/organizations.service';
-import { PrismaService } from '../prisma/prisma.service';
 import { MAIL_SENDER } from './email.service';
 import { EMAIL_QUEUE, type EmailJobData } from './email.queue';
 import {
@@ -36,7 +33,11 @@ import {
  * A personal `MailAccount` is NEVER used. The old first step picked "any
  * ACTIVE mailbox" with no tenant filter, so every organization's invitations
  * went out through one arbitrary employee's own SMTP login, from their
- * address, into their Sent folder.
+ * address, into their Sent folder. A later step picked any active mailbox
+ * whose address matched `MAIL_FROM`; mailbox addresses are not verified, so
+ * any user could register that address against their own server and receive
+ * a copy of every invitation link, portal password link and signing link in
+ * "their" Sent folder. Platform mail goes through the env transport only.
  *
  * Permanent failures (auth, bad recipients) throw `UnrecoverableError` so
  * BullMQ stops retrying; transient failures bubble for exponential backoff.
@@ -47,13 +48,10 @@ export class EmailProcessor extends WorkerHost {
 
   constructor(
     @Inject(MAIL_SENDER) private readonly sender: MailSender,
-    private readonly prisma: PrismaService,
     private readonly files: FilesService,
     // Optional so this processor still boots in environments that
     // haven't pulled in OrganizationsModule yet (tests, dev sandboxes).
     @Optional() private readonly organizations?: OrganizationsService,
-    @Optional() private readonly mailCrypto?: MailCryptoService,
-    @Optional() private readonly mailSend?: MailSendService,
   ) {
     super();
   }
@@ -122,40 +120,6 @@ export class EmailProcessor extends WorkerHost {
             `Email accepted by OrganizationMailConfig kind=${data.kind} to=${data.to} orgId=${data.organizationId} messageId=${outcome.messageId} response=${JSON.stringify(outcome.response)} attempt=${job.attemptsMade + 1}`,
           );
           return;
-        }
-      }
-
-      // Dedicated MailAccount (e.g. the MAIL_FROM no-reply address imported into the app).
-      // Uses the CRM's MailSendService outbox pipeline to send raw RFC 822 MIME
-      // and append a copy to the IMAP Sent folder, exactly like user webmail!
-      if (this.mailSend) {
-        const fromHeader = this.sender.getFromAddress() || 'no-reply@localhost';
-        const bareEmail = (fromHeader.match(/<([^>]+)>/)?.[1] ?? fromHeader).trim();
-        const mailAccount = await this.prisma.client.mailAccount.findFirst({
-          where: {
-            email: { equals: bareEmail, mode: 'insensitive' },
-            deletedAt: null,
-            status: 'ACTIVE',
-          },
-        });
-        if (mailAccount) {
-          try {
-            const outbox = await this.mailSend.enqueue(mailAccount.userId, {
-              accountId: mailAccount.id,
-              to: [data.to],
-              subject: rendered.subject,
-              bodyText: rendered.text,
-              bodyHtml: rendered.html,
-            });
-            this.logger.log(
-              `Email enqueued via MailSendService kind=${data.kind} to=${data.to} outboxId=${outbox.id} accountId=${mailAccount.id} email=${mailAccount.email}`,
-            );
-            return;
-          } catch (err) {
-            this.logger.warn(
-              `MailSendService enqueue failed for ${mailAccount.email}, falling back: ${(err as Error)?.message ?? 'unknown'}`,
-            );
-          }
         }
       }
 
