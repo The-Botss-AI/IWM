@@ -133,6 +133,8 @@ export default function HomeScreen() {
   const webRef = useRef<WebView>(null);
   const canGoBack = useRef(false);
   const webLoaded = useRef(false);
+  // Is the page in the WebView one of ours? Gates every injection.
+  const onAppPage = useRef(false);
   const pushToken = useRef<string | null>(null);
   // A tap that arrives while the WebView is loading (or failed to load) is
   // parked here and flushed once a load succeeds.
@@ -222,6 +224,10 @@ export default function HomeScreen() {
    * need extra storage permissions on Android and is not possible on iOS.
    */
   const onMessage = useCallback(async (event: WebViewMessageEvent) => {
+    // Only our own pages may use the bridge. A page the WebView was navigated
+    // to (any `data:` / `blob:` page, a future iframe) must not be able to
+    // drop files on the device and open the share sheet.
+    if (!isAppUrl(event.nativeEvent.url)) return;
     let payload: {
       type?: string;
       filename?: string;
@@ -292,7 +298,7 @@ export default function HomeScreen() {
     void registerForPushTokenAsync().then((token) => {
       if (!token) return;
       pushToken.current = token;
-      if (webLoaded.current) sendPushToken(token);
+      if (webLoaded.current && onAppPage.current) sendPushToken(token);
     });
 
     // Cold start: was the app launched by tapping a notification? Answered
@@ -366,7 +372,8 @@ export default function HomeScreen() {
 
   const onNavStateChange = useCallback((nav: WebViewNavigation) => {
     canGoBack.current = nav.canGoBack;
-    if (isAppUrl(nav.url)) currentUrl.current = nav.url;
+    onAppPage.current = isAppUrl(nav.url);
+    if (onAppPage.current) currentUrl.current = nav.url;
   }, []);
 
   const onLoadProgress = useCallback(
@@ -384,19 +391,27 @@ export default function HomeScreen() {
   // `onLoad` fires only for a successful load (`onLoadEnd` also fires on
   // errors, which used to mark the error page as ready and inject navigation
   // into it).
-  const onLoad = useCallback(() => {
-    webLoaded.current = true;
-    loadFailed.current = false;
-    retryCount.current = 0;
-    clearRetry();
-    // Flush anything that was waiting on the WebView being ready.
-    announceCapabilities();
-    if (pushToken.current) sendPushToken(pushToken.current);
-    if (pendingUrl.current) {
-      navigateTo(pendingUrl.current);
-      pendingUrl.current = null;
-    }
-  }, [announceCapabilities, clearRetry, navigateTo, sendPushToken]);
+  const onLoad = useCallback(
+    ({ nativeEvent }: { nativeEvent: { url: string } }) => {
+      webLoaded.current = true;
+      loadFailed.current = false;
+      retryCount.current = 0;
+      clearRetry();
+      // The push token and the native capabilities are for our own pages only:
+      // the WebView also loads `data:`, `about:` and `blob:` pages, which must
+      // never receive the token.
+      onAppPage.current = isAppUrl(nativeEvent.url);
+      if (!onAppPage.current) return;
+      // Flush anything that was waiting on the WebView being ready.
+      announceCapabilities();
+      if (pushToken.current) sendPushToken(pushToken.current);
+      if (pendingUrl.current) {
+        navigateTo(pendingUrl.current);
+        pendingUrl.current = null;
+      }
+    },
+    [announceCapabilities, clearRetry, navigateTo, sendPushToken],
+  );
 
   const onError = useCallback(() => {
     webLoaded.current = false;
@@ -479,10 +494,12 @@ export default function HomeScreen() {
           sharedCookiesEnabled
           thirdPartyCookiesEnabled
           cacheEnabled
-          // Calls: inline playback and camera/mic without a user-gesture gate.
+          // Calls: inline playback without a user-gesture gate. Camera and mic
+          // are granted silently to our own host only; any other origin (an
+          // embedded frame, a page navigated to) gets the system prompt.
           allowsInlineMediaPlayback
           mediaPlaybackRequiresUserAction={false}
-          mediaCapturePermissionGrantType="grant"
+          mediaCapturePermissionGrantType="grantIfSameHostElsePrompt"
           // File picker (chat attachments, document uploads).
           allowFileAccess
           // Native Android pull-to-refresh.
