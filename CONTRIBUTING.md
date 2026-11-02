@@ -5,9 +5,10 @@ before you open a pull request.
 
 ## Setup
 
-Follow the [Quick start](README.md#quick-start) in the README: `pnpm install`,
-`docker compose up -d`, copy the `.env.example` files, `pnpm db:migrate --name init`,
-`pnpm db:seed:dev`, `pnpm dev`.
+Follow the [Quick start](README.md#4-quick-start) in the README: `pnpm install`,
+`pnpm quickstart`, `pnpm dev`. `pnpm quickstart` creates the env files with
+generated secrets, starts the Docker services, creates the schema and seeds demo
+data. The README also lists the same steps for doing them by hand.
 
 Requirements: Node.js >= 22.12, pnpm >= 9, Docker.
 

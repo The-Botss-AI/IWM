@@ -70,6 +70,7 @@ import helmet from 'helmet';
 
 import { AppModule } from './app.module';
 import { setAuthInstance } from './auth/auth.service';
+import { PreflightError, runPreflight } from './common/preflight';
 import { reportSignInFailure } from './security-alerts/sign-in-failure-sink';
 import { isAllowedBetterAuthRoute } from './auth/better-auth-routes';
 import { getSharedMailSender } from './email/email.module';
@@ -115,11 +116,10 @@ async function bootstrap(): Promise<void> {
   logger.log('Starting API bootstrap...');
   logger.log(`Process role: ${describeProcessRole(role)}`);
 
-  if (!process.env.BETTER_AUTH_SECRET) {
-    logger.error('BETTER_AUTH_SECRET is missing from process.env');
-    throw new Error('BETTER_AUTH_SECRET is required.');
-  }
-  logger.log('BETTER_AUTH_SECRET found.');
+  // Required env vars and (outside production) Postgres/Redis reachability.
+  // Throws PreflightError with a readable list of what to fix.
+  await runPreflight();
+  logger.log('Preflight checks passed.');
 
   // 1) Build Better Auth FIRST and mount its handler in the Express middleware
   //    chain BEFORE NestJS adds its catch-all router (otherwise Nest's 404
@@ -160,7 +160,8 @@ async function bootstrap(): Promise<void> {
   // Nest DI flow.
 
   const auth = await createAuth({
-    secret: process.env.BETTER_AUTH_SECRET,
+    // Non-empty: runPreflight() above rejects a missing secret.
+    secret: process.env.BETTER_AUTH_SECRET!,
     baseURL,
     trustedOrigins: webOriginList,
     cookieDomain,
@@ -444,6 +445,12 @@ async function bootstrap(): Promise<void> {
 }
 
 bootstrap().catch((err) => {
+  if (err instanceof PreflightError) {
+    // A setup problem, not a bug: the message says what to do, a stack would only bury it.
+    // eslint-disable-next-line no-console
+    console.error(`\n${err.message}\n`);
+    process.exit(1);
+  }
   // eslint-disable-next-line no-console
   console.error('Fatal bootstrap error', err);
   process.exit(1);
