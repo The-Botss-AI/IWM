@@ -327,6 +327,17 @@ export class DocumentsService {
         detail: 'You only have read access to this document.',
       });
     }
+    // Who can reach the document from outside (visibility, the public link's
+    // read-only flag and expiry) is a sharing decision: owner or workspace
+    // admin only, exactly like sharePublic / unshare. A WRITE grantee edits
+    // the content; they must not be able to lift a public link's expiry.
+    if (
+      input.visibility !== undefined ||
+      input.publicReadOnly !== undefined ||
+      input.publicExpiresAt !== undefined
+    ) {
+      await this.ensureCanManageShare(workspaceId, id, ctx);
+    }
     await this.assertWorkspaceRefs(workspaceId, {
       parentId: input.parentId ?? null,
       projectId: input.projectId ?? null,

@@ -69,6 +69,26 @@ function withDeletedAtNull(args: any): any {
   return { ...(args ?? {}), where: { ...(args?.where ?? {}), deletedAt: null } };
 }
 
+/**
+ * findUnique cannot be pre-filtered, so it is post-filtered on `deletedAt` -
+ * which needs the column in the result. A `select` without it used to come
+ * back without the field and sail through the filter, returning deleted rows
+ * (`select: { id: true }` lookups by id). Adds it to the select for the
+ * check; `added` says to strip it again before handing the row back.
+ */
+function withDeletedAtSelected(args: any): { args: any; added: boolean } {
+  const select = args?.select;
+  if (!select || select.deletedAt === true) return { args, added: false };
+  return { args: { ...args, select: { ...select, deletedAt: true } }, added: true };
+}
+
+function stripAddedDeletedAt<T>(row: T, added: boolean): T {
+  if (added && row && typeof row === 'object') {
+    delete (row as { deletedAt?: unknown }).deletedAt;
+  }
+  return row;
+}
+
 /** One soft-delete that just happened: the model and how many rows it hit. */
 export interface SoftDeleteEvent {
   model: string;
@@ -134,9 +154,7 @@ async function liveOne(delegate: any, where: any): Promise<number | null> {
  * - For genuine deletion (GDPR, seeds), call `model.hardDelete(...)` or
  *   `model.hardDeleteMany(...)`.
  *
- * Soft-delete models: User, Organization, Workspace, Project, Task, Lead,
- * Client, Document, FileObject, Comment, Contract, Expense, Invoice,
- * SignatureRequest.
+ * Soft-delete models: see `SOFT_DELETE_MODELS` above.
  */
 export function withSoftDelete(prisma: PrismaClient) {
   return prisma.$extends({
@@ -163,21 +181,23 @@ export function withSoftDelete(prisma: PrismaClient) {
           const { rest, includeDeleted } = partition(args);
           if (includeDeleted) return query(rest);
           // findUnique can't filter by non-unique deletedAt; post-filter instead.
-          const result = (await query(rest)) as { deletedAt?: Date | null } | null;
-          return result && result.deletedAt ? null : result;
+          const checked = withDeletedAtSelected(rest);
+          const result = (await query(checked.args)) as { deletedAt?: Date | null } | null;
+          return result && result.deletedAt ? null : stripAddedDeletedAt(result, checked.added);
         },
         async findUniqueOrThrow({ model, args, query }) {
           if (!isSoftDeleteModel(model)) return query(args);
           const { rest, includeDeleted } = partition(args);
           if (includeDeleted) return query(rest);
-          const result = (await query(rest)) as { deletedAt?: Date | null } | null;
+          const checked = withDeletedAtSelected(rest);
+          const result = (await query(checked.args)) as { deletedAt?: Date | null } | null;
           if (result && result.deletedAt) {
             throw new Prisma.PrismaClientKnownRequestError('No record found', {
               code: 'P2025',
               clientVersion: Prisma.prismaVersion.client,
             });
           }
-          return result;
+          return stripAddedDeletedAt(result, checked.added);
         },
         async count({ model, args, query }) {
           if (!isSoftDeleteModel(model)) return query(args);

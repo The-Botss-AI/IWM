@@ -4,6 +4,20 @@ import type { ListUsersQuery, UpdateUserInput } from '@botss/shared-types';
 import type { UserScope } from '../common/decorators/user-scope.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 
+/**
+ * What one coworker may see of another: a profile, not the account. Phone,
+ * company role, custom role, organization and verification state stay on the
+ * caller's own record (`/users/me`) and the admin screens.
+ */
+const COWORKER_PROFILE_SELECT = {
+  id: true,
+  name: true,
+  email: true,
+  image: true,
+  timezone: true,
+  locale: true,
+} as const;
+
 @Injectable()
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
@@ -27,6 +41,7 @@ export class UsersService {
         skip,
         take: query.pageSize,
         orderBy: { name: 'asc' },
+        select: COWORKER_PROFILE_SELECT,
       }),
       this.prisma.client.user.count({ where }),
     ]);
@@ -86,7 +101,12 @@ export class UsersService {
     if (!sharedMembership) {
       throw new NotFoundException({ title: 'User not found', status: 404 });
     }
-    return this.getById(id);
+    const profile = await this.prisma.client.user.findUnique({
+      where: { id },
+      select: COWORKER_PROFILE_SELECT,
+    });
+    if (!profile) throw new NotFoundException({ title: 'User not found', status: 404 });
+    return profile;
   }
 
   async updateMe(userId: string, input: UpdateUserInput) {
