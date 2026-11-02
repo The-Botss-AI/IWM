@@ -2033,6 +2033,23 @@ export class ChatService {
         status: 404,
       });
     }
+    // A room with no ADMIN row falls back to "every member is an admin"
+    // (assertRoomAdmin, for rooms older than roles). Demoting the last admin
+    // would trigger that fallback and hand admin rights to everyone, so the
+    // last admin stays one until someone else is promoted.
+    if (role !== 'ADMIN') {
+      const admins = await this.prisma.client.chatRoomParticipant.findMany({
+        where: { roomId, role: 'ADMIN' },
+        select: { userId: true },
+      });
+      if (admins.length === 1 && admins[0]!.userId === targetUserId) {
+        throw new BadRequestException({
+          title: 'A group needs at least one admin',
+          status: 400,
+          detail: 'Make someone else an admin first.',
+        });
+      }
+    }
     await this.prisma.client.chatRoomParticipant.update({
       where: { roomId_userId: { roomId, userId: targetUserId } },
       data: { role },
