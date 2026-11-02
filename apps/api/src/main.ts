@@ -303,6 +303,28 @@ async function bootstrap(): Promise<void> {
   });
   expressApp.use(`/${apiPrefix}/admin/email/test`, emailTestLimiter);
 
+  // Adding a mailbox or pressing "Test" makes the API log in to the IMAP/SMTP
+  // host the user typed, from the server's own IP. Unbounded, any user could
+  // hammer a shared mail host with failed logins until it bans the server
+  // (cPHulk and fail2ban do) and mail stops for every tenant on it.
+  const mailboxCheckLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 10,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { title: 'Too many mailbox checks. Try again later.', status: 429 },
+  });
+  const mailboxCheckPath = new RegExp(
+    `^/${apiPrefix}/mail/accounts(?:/self-setup|/[^/]+/test)?/?$`,
+  );
+  expressApp.use((req, res, next) => {
+    if (req.method === 'POST' && mailboxCheckPath.test(req.path)) {
+      mailboxCheckLimiter(req, res, next);
+      return;
+    }
+    next();
+  });
+
   // Throttle the public, unauthenticated invitation routes (token lookup +
   // accept). The token is a 256-bit random value so brute force is infeasible,
   // but these routes are otherwise unbounded; cap request volume per IP.

@@ -45,6 +45,14 @@ async function main(): Promise<void> {
   assert.equal(badKey.length, 1);
   assert.match(badKey[0]!, /64 hex characters/);
 
+  // A short secret is fine in development and refused in production.
+  const shortSecret = { ...GOOD_ENV, BETTER_AUTH_SECRET: 'secret123' };
+  assert.deepEqual(findEnvProblems(shortSecret), []);
+  const shortInProd = findEnvProblems({ ...shortSecret, NODE_ENV: 'production' });
+  assert.equal(shortInProd.length, 1);
+  assert.match(shortInProd[0]!, /too short for production/);
+  assert.deepEqual(findEnvProblems({ ...GOOD_ENV, NODE_ENV: 'production' }), []);
+
   // 2. Complete env.
   assert.deepEqual(findEnvProblems(GOOD_ENV), []);
 
