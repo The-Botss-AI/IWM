@@ -17,7 +17,7 @@
     "lint": "turbo run lint --concurrency=4",
     "test": "turbo run test --concurrency=4",
     "typecheck": "turbo run typecheck --concurrency=4",
-    "verify": "turbo run typecheck lint test --concurrency=4",
+    "verify": "turbo run typecheck lint test --concurrency=4 && node scripts/check-docker-config.mjs",
     "knip": "knip",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yaml,yml}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yaml,yml}\"",
