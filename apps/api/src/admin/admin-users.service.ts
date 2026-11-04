@@ -21,6 +21,7 @@ import {
 } from './admin-user-policy';
 import { SessionsService } from '../sessions/sessions.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { handOverSoleAdminRooms } from '../chat/room-admins';
 import { SecurityAlertsService } from '../security-alerts/security-alerts.service';
 import { CpanelService } from '../cpanel/cpanel.service';
 import { ROOT_ORG_ID } from '../organizations/organizations.constants';
@@ -824,6 +825,10 @@ export class AdminUsersService {
       // mid-transaction read might still see the rows.
       await tx.session.deleteMany({ where: { userId: targetUserId } });
       await tx.account.deleteMany({ where: { userId: targetUserId } });
+
+      // Chat rooms where they are the only admin get a successor first, or
+      // the participant cascade would leave them with none.
+      await handOverSoleAdminRooms(tx, targetUserId);
 
       // The actual hard delete. All Cascade-FK dependents disappear as
       // a side effect; transferred references survive under the acting

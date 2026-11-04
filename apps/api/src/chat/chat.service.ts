@@ -37,6 +37,7 @@ import { NotificationsPushService } from '../notifications/notifications-push.se
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { incomingRequestWhere } from './chat-request-rules';
+import { assertRoomAdminRows, lockRoomAdmins, roomAdminRowsWhere } from './room-admins';
 import {
   assertNotBlockedInCrossOrgDm,
   inviteKeepsOrganization,
@@ -120,22 +121,6 @@ function assertNotReservedContent(content: string | null | undefined): void {
   }
 }
 
-/**
- * Lock a room's row for the rest of the transaction, so changes to who its
- * admins are (a demotion, an admin leaving) run one at a time per room. Without
- * it two admins demoting each other, or leaving together, both see the other as
- * the remaining admin and the room ends up with none.
- *
- * FOR NO KEY UPDATE, not FOR UPDATE: it does not block the FOR KEY SHARE that
- * foreign-key checks take when a message or participant row is inserted.
- */
-async function lockRoomAdmins(
-  tx: { $queryRaw<T = unknown>(query: TemplateStringsArray, ...values: unknown[]): Promise<T> },
-  roomId: string,
-): Promise<void> {
-  await tx.$queryRaw`SELECT id FROM "ChatRoom" WHERE id = ${roomId} FOR NO KEY UPDATE`;
-}
-
 @Injectable()
 export class ChatService {
   private readonly logger = new Logger(ChatService.name);
@@ -171,10 +156,13 @@ export class ChatService {
       select: { userId: true, role: true },
     });
     const adminCount = participants.filter((p) => p.role === 'ADMIN').length;
-    // Legacy room: nobody has an ADMIN row - every member is an admin to keep
-    // existing groups manageable.
-    if (adminCount === 0) return;
     const self = participants.find((p) => p.userId === userId);
+    // Legacy room: nobody has an ADMIN row - every member is an admin to keep
+    // existing groups manageable. Only people IN the room: an open channel
+    // lets anyone in the organization read and post without a participant
+    // row, and a channel whose last admin left must not hand all of them its
+    // admin tools.
+    if (adminCount === 0 && self) return;
     if (self?.role !== 'ADMIN') {
       throw new ForbiddenException({
         title: 'Admin only',
@@ -1985,10 +1973,7 @@ export class ChatService {
         detail: 'The creator of this chat cannot be removed.',
       });
     }
-    // Record the system message BEFORE the delete, while both users still
-    // resolve, and author it as the actor so it stays visible to the
-    // remaining members (the removed user drops out of the room socket once
-    // the delete lands, so they won't see it - same as Slack).
+    // Both names for the "removed" system message posted after the delete.
     const people = await this.prisma.client.user.findMany({
       where: { id: { in: [actingUserId, targetUserId] } },
       select: { id: true, name: true, email: true },
@@ -1997,17 +1982,29 @@ export class ChatService {
       const u = people.find((p) => p.id === id);
       return u?.name?.trim() || u?.email || 'Someone';
     };
+    // An admin may not boot another admin unless the target is *not* the
+    // creator. The creator check above already blocked the only protected
+    // case, so an admin-acting-on-admin removal proceeds. The admin check and
+    // the delete run under the room lock, like demotions and leaving: two
+    // admins removing each other at once both passed the check above and
+    // left the room with none. Under the lock the actor is still an admin, and
+    // cannot be the one removed, so an admin always remains.
+    await this.prisma.client.$transaction(async (tx) => {
+      await lockRoomAdmins(tx, roomId);
+      const rows = await tx.chatRoomParticipant.findMany({
+        where: roomAdminRowsWhere(roomId, actingUserId),
+        select: { userId: true, role: true },
+      });
+      assertRoomAdminRows(rows, actingUserId);
+      await tx.chatRoomParticipant.deleteMany({ where: { roomId, userId: targetUserId } });
+    });
+    // Announced only once the removal has happened. Authored by the actor,
+    // so the remaining members see it; the removed user has already dropped
+    // out of the room (same as Slack).
     const systemMessage = await this.recordSystemMessage(roomId, actingUserId, {
       event: 'removed',
       target: nameOf(targetUserId),
       actor: nameOf(actingUserId),
-    });
-
-    // An admin may not boot another admin unless the target is *not* the
-    // creator. The creator check above already blocked the only protected
-    // case, so an admin-acting-on-admin removal proceeds.
-    await this.prisma.client.chatRoomParticipant.deleteMany({
-      where: { roomId, userId: targetUserId },
     });
     return { ok: true, systemMessage };
   }
@@ -2052,15 +2049,18 @@ export class ChatService {
     // A room with no ADMIN row falls back to "every member is an admin"
     // (assertRoomAdmin, for rooms older than roles). Demoting the last admin
     // would trigger that fallback and hand admin rights to everyone, so the
-    // last admin stays one until someone else is promoted. The count and the
-    // update share one transaction under the room lock.
+    // last admin stays one until someone else is promoted. The actor's own
+    // rights, the count and the update share one transaction under the room
+    // lock.
     await this.prisma.client.$transaction(async (tx) => {
       await lockRoomAdmins(tx, roomId);
+      const rows = await tx.chatRoomParticipant.findMany({
+        where: roomAdminRowsWhere(roomId, actingUserId),
+        select: { userId: true, role: true },
+      });
+      assertRoomAdminRows(rows, actingUserId);
       if (role !== 'ADMIN') {
-        const admins = await tx.chatRoomParticipant.findMany({
-          where: { roomId, role: 'ADMIN' },
-          select: { userId: true },
-        });
+        const admins = rows.filter((r) => r.role === 'ADMIN');
         if (admins.length === 1 && admins[0]!.userId === targetUserId) {
           throw new BadRequestException({
             title: 'A group needs at least one admin',
@@ -2314,6 +2314,17 @@ export class ChatService {
     code: string,
   ): Promise<{ roomId: string; alreadyJoined: boolean; systemMessage: ChatRoomMessage | null }> {
     const invite = await this.findActiveInvite(code);
+    // A current member is told so before any other check runs: expiry, the
+    // usage cap and the join rules decide who may come in, and a member
+    // (of a cross-org room too) is already in. The invite page accepts again
+    // on its own for members, so an error here made it retry in a loop.
+    const existing = await this.prisma.client.chatRoomParticipant.findUnique({
+      where: { roomId_userId: { roomId: invite.roomId, userId } },
+      select: { id: true },
+    });
+    if (existing) {
+      return { roomId: invite.roomId, alreadyJoined: true, systemMessage: null };
+    }
     const now = Date.now();
     if (invite.expiresAt && invite.expiresAt.getTime() < now) {
       throw new BadRequestException({ title: 'Invite expired', status: 400 });
@@ -2322,15 +2333,6 @@ export class ChatService {
     // conditional increment inside the transaction below.
     if (invite.maxUses && invite.usedCount >= invite.maxUses) {
       throw new BadRequestException({ title: 'Invite reached its usage cap', status: 400 });
-    }
-    // A current member is told so before any join rule runs: the rules decide
-    // who may come in, and a member of a cross-org room is already in.
-    const existing = await this.prisma.client.chatRoomParticipant.findUnique({
-      where: { roomId_userId: { roomId: invite.roomId, userId } },
-      select: { id: true },
-    });
-    if (existing) {
-      return { roomId: invite.roomId, alreadyJoined: true, systemMessage: null };
     }
     await this.assertMayJoinViaInvite(userId, invite);
     // Claim a use atomically. Read-then-increment let N concurrent accepts on
@@ -2473,9 +2475,10 @@ export class ChatService {
           },
         },
         // Moderation needs to know a conversation exists and who is in it, not
-        // what was said. Only a public channel's last message is loaded (its
-        // workspace can read it); DMs, groups and private channels come back
-        // without one, so their bodies never leave the database.
+        // what was said. Only public channels' messages are queried (their
+        // workspace can read them), and each lists its newest; DMs, groups and
+        // private channels come back without one, so their bodies never leave
+        // the database.
         messages: {
           where: { deletedAt: null, room: { workspaceId: { not: null }, isPrivate: false } },
           orderBy: { createdAt: 'desc' },
