@@ -91,7 +91,9 @@ function InviteCard({
     return MessageSquare;
   }, [preview.room.type]);
 
-  const blocked = preview.expired || preview.exhausted;
+  // Expiry and the usage cap stop new people only: a member always gets
+  // through to the chat (acceptInvite answers alreadyJoined first).
+  const blocked = !preview.alreadyJoined && (preview.expired || preview.exhausted);
 
   return (
     <div className="grid h-full place-items-center px-6 py-12">
@@ -123,17 +125,17 @@ function InviteCard({
           </span>
         </div>
 
-        {preview.expired ? (
+        {preview.alreadyJoined ? (
+          <p className="bg-tint-info text-brand-teal mt-4 rounded-md px-3 py-2 text-xs">
+            You&apos;re already in this chat - taking you there.
+          </p>
+        ) : preview.expired ? (
           <p className="bg-tint-error text-state-error mt-4 rounded-md px-3 py-2 text-xs">
             This invite has expired. Ask {preview.invitedBy.name} for a new link.
           </p>
         ) : preview.exhausted ? (
           <p className="bg-tint-error text-state-error mt-4 rounded-md px-3 py-2 text-xs">
             This invite has reached its limit.
-          </p>
-        ) : preview.alreadyJoined ? (
-          <p className="bg-tint-info text-brand-teal mt-4 rounded-md px-3 py-2 text-xs">
-            You&apos;re already in this chat - taking you there.
           </p>
         ) : null}
 
