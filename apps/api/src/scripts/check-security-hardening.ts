@@ -712,7 +712,8 @@ async function main(): Promise<void> {
     await legacy.assertRoomAdmin(ME, 'r1');
 
     // Hard-deleting a room's only admin hands the room to its oldest other
-    // participant first; a room with another admin is left alone.
+    // participant first; a room with another admin is left alone. Locks come
+    // first: the user row, then every non-DM room they are in, in id order.
     const people: Record<string, Array<{ userId: string; role: string; joinedAt: number }>> = {
       solo: [
         { userId: ME, role: 'ADMIN', joinedAt: 1 },
@@ -725,25 +726,34 @@ async function main(): Promise<void> {
       ],
     };
     const handover: string[] = [];
-    type ParticipantWhere = { roomId?: string; userId?: string | { not: string }; role?: string };
-    const matches = (p: { userId: string; role: string }, w: ParticipantWhere) =>
-      (w.role === undefined || p.role === w.role) &&
-      (w.userId === undefined ||
-        (typeof w.userId === 'string' ? p.userId === w.userId : p.userId !== w.userId.not));
     await handOverSoleAdminRooms(
       {
-        $queryRaw: async () => (handover.push('lock'), []),
+        $queryRaw: async (sql: TemplateStringsArray) => {
+          const text = sql.join('?');
+          if (/FROM "User"[\s\S]*FOR UPDATE/.test(text)) {
+            handover.push('lock-user');
+            return [];
+          }
+          assert.match(text, /type <> 'DM'[\s\S]*ORDER BY r\.id[\s\S]*FOR NO KEY UPDATE/);
+          handover.push('lock-rooms');
+          return [{ id: 'shared' }, { id: 'solo' }];
+        },
         chatRoomParticipant: {
-          findMany: async (a: { where: ParticipantWhere }) =>
-            Object.entries(people).flatMap(([roomId, list]) =>
-              a.where.roomId === undefined || a.where.roomId === roomId
-                ? list.filter((p) => matches(p, a.where)).map((p) => ({ ...p, roomId }))
-                : [],
+          findMany: async (a: { where: { roomId: { in: string[] }; role: string } }) =>
+            a.where.roomId.in.flatMap((roomId) =>
+              people[roomId]!.filter((p) => p.role === a.where.role).map((p) => ({ ...p, roomId })),
             ),
-          findFirst: async (a: { where: ParticipantWhere }) =>
-            [...people[a.where.roomId!]!]
-              .sort((x, y) => x.joinedAt - y.joinedAt)
-              .find((p) => matches(p, a.where)) ?? null,
+          findFirst: async (a: {
+            where: { roomId: string; userId: { not: string } };
+            orderBy: unknown;
+          }) => {
+            assert.deepEqual(a.orderBy, { joinedAt: 'asc' }, 'the oldest participant succeeds');
+            return (
+              [...people[a.where.roomId]!]
+                .sort((x, y) => x.joinedAt - y.joinedAt)
+                .find((p) => p.userId !== a.where.userId.not) ?? null
+            );
+          },
           update: async (a: { where: { roomId_userId: { roomId: string; userId: string } } }) => {
             const { roomId, userId } = a.where.roomId_userId;
             handover.push(`promote:${roomId}:${userId}`);
@@ -752,7 +762,36 @@ async function main(): Promise<void> {
       } as never,
       ME,
     );
-    assert.deepEqual(handover, ['lock', 'lock', `promote:solo:${OTHER}`]);
+    assert.deepEqual(handover, ['lock-user', 'lock-rooms', `promote:solo:${OTHER}`]);
+    // And the user deletion runs it, before the user row goes.
+    const removeSource = readFileSync(
+      resolve(__dirname, '../admin/admin-users.service.ts'),
+      'utf8',
+    );
+    const handOverAt = removeSource.indexOf('await handOverSoleAdminRooms(tx, targetUserId)');
+    assert.ok(handOverAt > 0, 'AdminUsersService.remove hands rooms over');
+    assert.ok(
+      handOverAt < removeSource.indexOf('await tx.user.delete({ where: { id: targetUserId } })'),
+      'the hand-over runs before the user is deleted',
+    );
+
+    // The admin room list queries messages of public channels only, so DM,
+    // group and private-channel bodies are never loaded.
+    let listArgs: { include: { messages: { where: unknown } } } | undefined;
+    await new ChatService(
+      {
+        client: {
+          chatRoom: {
+            findMany: async (a: typeof listArgs) => ((listArgs = a), []),
+          },
+        },
+      } as unknown as PrismaService,
+      {} as never,
+    ).listAdminRoomsForWorkspace(WS, { systemRole: 'ADMIN', organizationId: ORG });
+    assert.deepEqual(listArgs?.include.messages.where, {
+      deletedAt: null,
+      room: { workspaceId: { not: null }, isPrivate: false },
+    });
   }
 
   // 17. Filing a document ------------------------------------------------------
@@ -842,6 +881,31 @@ async function main(): Promise<void> {
       projectAccessWhere(filer(ALICE).scope as never),
     ]);
     assert.equal(writes.length, 2, 'only the title edit and the visible filing are written');
+
+    // The share dialog: a project's client (here Y, which Alice cannot see)
+    // no longer gets past the sales rules. Only the filed client does, and
+    // filing is already limited to the owner or an admin who can see it.
+    let filed: { clientId: string | null; project: { clientId: string } | null } = {
+      clientId: null,
+      project: { clientId: CLIENT_Y },
+    };
+    const dialog = new DocumentsService(
+      { client: { document: { findFirst: async () => filed } } } as unknown as PrismaService,
+      {} as never,
+    );
+    const shareable = (
+      dialog as unknown as {
+        shareableClientWhere: (
+          ws: string,
+          id: string,
+          actor: unknown,
+        ) => Promise<{ AND: unknown[] }>;
+      }
+    ).shareableClientWhere.bind(dialog);
+    const pickRule = async () => (await shareable(WS, 'd1', filer(ALICE).actor)).AND[0];
+    assert.deepEqual(await pickRule(), { OR: [{ assigneeId: ALICE }, { id: { in: [] } }] });
+    filed = { clientId: CLIENT_X, project: { clientId: CLIENT_Y } };
+    assert.deepEqual(await pickRule(), { OR: [{ assigneeId: ALICE }, { id: { in: [CLIENT_X] } }] });
   }
 
   // 18. Signup slugs and signature titles -------------------------------------
