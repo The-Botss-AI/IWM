@@ -699,10 +699,17 @@ export class DocumentsService {
   }
 
   /**
-   * Clients this person may pick in the share dialog: the client of the
-   * document's project and the client it is filed under, plus clients they
-   * can see under the normal sales rules (every client with full access,
-   * otherwise assigned ones) that already have portal people.
+   * Clients this person may pick in the share dialog: clients they can see
+   * under the normal sales rules (every client with full access, otherwise
+   * assigned ones) that already have portal people, plus the client the
+   * document is filed under.
+   *
+   * Only the filed client gets past the sales rules. Filing needs the owner
+   * or an admin and a client they can see (update, assertWorkspaceRefs), so
+   * it was a deliberate choice. A project's client was not chosen by whoever
+   * files a document there, since any project editor can link a project to a
+   * client; offering it to every document owner in the project put a client's
+   * portal, and its people, in front of members who cannot see that client.
    */
   private async shareableClientWhere(
     workspaceId: string,
@@ -713,8 +720,9 @@ export class DocumentsService {
       where: { id: documentId, workspaceId },
       select: { clientId: true, project: { select: { clientId: true } } },
     });
-    // The document's own clients: always offered, even with no portal people
-    // yet, so the dialog can explain why there is nobody to share with.
+    const filedIds = doc?.clientId ? [doc.clientId] : [];
+    // The document's own clients are listed even with no portal people yet,
+    // so the dialog can explain why there is nobody to share with.
     const ownClientIds = [doc?.project?.clientId, doc?.clientId].filter(
       (id): id is string => typeof id === 'string',
     );
@@ -722,9 +730,7 @@ export class DocumentsService {
       workspaceId,
       deletedAt: null,
       AND: [
-        actor.fullClients
-          ? {}
-          : { OR: [{ assigneeId: actor.userId }, { id: { in: ownClientIds } }] },
+        actor.fullClients ? {} : { OR: [{ assigneeId: actor.userId }, { id: { in: filedIds } }] },
         { OR: [{ contacts: { some: { deletedAt: null } } }, { id: { in: ownClientIds } }] },
       ],
     };
