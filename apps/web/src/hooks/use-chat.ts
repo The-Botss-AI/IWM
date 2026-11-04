@@ -521,10 +521,21 @@ export type ParsedShareCard = {
  * `/todo#...`). Anything else - an absolute URL, a protocol-relative `//host`
  * or a backslash path some browsers treat like one - came from a forged
  * message, so it is dropped rather than rendered as a clickable link.
+ * Browsers delete tabs and newlines while parsing a URL (`/\t/evil.example`
+ * becomes `//evil.example`), so control characters and spaces are refused
+ * too, and the link must still resolve to the same origin.
  */
+const SHARE_LINK_BASE = 'https://app.invalid';
+
 export function shareCardHref(link: unknown): string {
   if (typeof link !== 'string') return '#';
-  return /^\/(?![/\\])[^\\]*$/.test(link) ? link : '#';
+  if (!/^\/(?![/\\])[^\\\u0000- \u007f]*$/.test(link)) return '#';
+  try {
+    if (new URL(link, SHARE_LINK_BASE).origin !== SHARE_LINK_BASE) return '#';
+  } catch {
+    return '#';
+  }
+  return link;
 }
 
 export function parseShareCard(content: string | null): ParsedShareCard | null {
