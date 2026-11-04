@@ -102,8 +102,13 @@ app.on('web-contents-created', (_event, contents) => {
       openExternalSafely(url);
     }
   });
-  contents.on('will-redirect', (event, url) => {
-    if (!isAppOrigin(url)) event.preventDefault();
+  contents.on('will-redirect', (event, url, _isInPlace, isMainFrame) => {
+    if (isAppOrigin(url)) return;
+    event.preventDefault();
+    // A page redirecting off the app (a download, an outside sign-in or
+    // billing page) opens in the browser, as a link does in will-navigate.
+    // A frame's redirect is only stopped: an embed must not open browser tabs.
+    if (isMainFrame) openExternalSafely(url);
   });
   contents.on('will-attach-webview', (event) => event.preventDefault());
 });
