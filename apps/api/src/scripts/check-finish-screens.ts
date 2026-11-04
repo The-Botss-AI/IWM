@@ -407,18 +407,29 @@ async function main() {
       },
     } as unknown as PrismaService;
     const sprints = new SprintsService(prisma, {} as never);
+    // A workspace member with `projects.update` may edit any sprint here.
+    const editor = defineAbilityFor({
+      userId: USER,
+      systemRole: 'EMPLOYEE',
+      permissions: presetPermissions({
+        systemRole: 'EMPLOYEE',
+        workspaceMemberships: [{ role: 'MEMBER' }],
+      }),
+      workspaceMemberships: [{ workspaceId: WS, role: 'MEMBER' }],
+      projectMemberships: [],
+    });
     await assert.rejects(
-      sprints.update(scope, SPRINT, { endDate: day('2026-10-05') }),
+      sprints.update(scope, editor, SPRINT, { endDate: day('2026-10-05') }),
       (e: unknown) => e instanceof BadRequestException,
       'G8: a partial edit ending before the stored start is a 400',
     );
     await assert.rejects(
-      sprints.update(scope, SPRINT, { startDate: day('2026-10-25') }),
+      sprints.update(scope, editor, SPRINT, { startDate: day('2026-10-25') }),
       (e: unknown) => e instanceof BadRequestException,
       'G8: a partial edit starting after the stored end is a 400',
     );
     assert.equal(updates.length, 0, 'G8: refused edits write nothing');
-    await sprints.update(scope, SPRINT, { endDate: day('2026-10-10'), goal: null });
+    await sprints.update(scope, editor, SPRINT, { endDate: day('2026-10-10'), goal: null });
     assert.deepEqual(
       (updates[0] as Row)['data'],
       { endDate: day('2026-10-10'), goal: null },

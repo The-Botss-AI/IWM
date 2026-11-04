@@ -16,6 +16,23 @@ export function spansOrganizations(
 }
 
 /**
+ * Joining a DM or group (no workspace) by invite code keeps the room inside
+ * one organization: the joiner, the invite's creator and everyone already in
+ * the room share it. Users without an organization (client portal accounts)
+ * never join by invite. Only an accepted chat request opens a conversation
+ * across organizations.
+ */
+export function inviteKeepsOrganization(input: {
+  joinerOrgId: string | null;
+  creatorOrgId: string | null;
+  participantOrgIds: ReadonlyArray<string | null>;
+}): boolean {
+  const org = input.joinerOrgId;
+  if (!org) return false;
+  return input.creatorOrgId === org && input.participantOrgIds.every((id) => id === org);
+}
+
+/**
  * A cross-organization DM goes quiet once either side blocks the other (from
  * a chat request or from the DM header): nothing new may reach the other
  * person - no messages, edits, reactions, forwards, calls or call tokens.

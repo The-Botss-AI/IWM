@@ -1,6 +1,7 @@
 import { Controller, Get } from '@nestjs/common';
 
 import { CurrentSalesActor, type SalesActor } from '../common/decorators/sales-actor.decorator';
+import { SkipPermissions } from '../common/decorators/skip-permissions.decorator';
 import { SalesAccessService } from './sales-access.service';
 
 @Controller('sales-access')
@@ -13,6 +14,7 @@ export class SalesAccessController {
    * own role and assignments, so it discloses nothing they can't already see.
    */
   @Get()
+  @SkipPermissions()
   get(@CurrentSalesActor() actor: SalesActor) {
     return this.salesAccess.forActor(actor);
   }

@@ -217,10 +217,6 @@ export class TasksService {
       },
     });
 
-    console.log(
-      `[TasksService] create: success, id=${created.id}, title=${created.title}, projectId=${created.projectId}, status=${created.status}`,
-    );
-
     // Notify the assignee (unless they assigned themselves).
     if (input.assigneeId && input.assigneeId !== userId) {
       void this.notifications
@@ -238,6 +234,30 @@ export class TasksService {
         .catch(() => {});
     }
     return created;
+  }
+
+  /**
+   * Refuse a parent that already descends from the task (A under B while B
+   * sits under A). Every view that walks parents would otherwise loop on the
+   * cycle; the board only survives it because it stops after 10 ancestors.
+   * The walk is bounded the same way the depth of real hierarchies is.
+   */
+  private async assertNotOwnAncestor(taskId: string, parentId: string): Promise<void> {
+    let current: string | null = parentId;
+    for (let depth = 0; current && depth < 50; depth++) {
+      if (current === taskId) {
+        throw new BadRequestException({
+          title: 'Invalid parent task',
+          status: 400,
+          detail: 'A task cannot be moved under one of its own subtasks.',
+        });
+      }
+      const row: { parentTaskId: string | null } | null = await this.prisma.client.task.findUnique({
+        where: { id: current },
+        select: { parentTaskId: true },
+      });
+      current = row?.parentTaskId ?? null;
+    }
   }
 
   async update(scope: UserScope, id: string, input: UpdateTaskInput) {
@@ -265,6 +285,7 @@ export class TasksService {
           detail: 'The parent task must belong to the same project.',
         });
       }
+      await this.assertNotOwnAncestor(id, input.parentTaskId);
     }
     if (input.assigneeId) {
       await this.assertAssigneeInOrg(existing.projectId, input.assigneeId);
@@ -502,15 +523,18 @@ export class TasksService {
   }
 
   /** Restore an archived task (clears deletedAt and bounces CANCELLED → BACKLOG). */
-  async restore(scope: UserScope, id: string) {
+  async restore(scope: UserScope, ability: AppAbility, id: string) {
     // Read the soft-deleted row, but constrain to the caller's scope so a
     // task in another workspace/org can't be resurrected by guessing its id.
     // findFirst + includeDeleted bypasses the soft-delete read filter while
     // still applying the project access constraint (mirrors get()).
     const existing = await (
-      this.prisma.client.task.findFirst as unknown as (
-        args: unknown,
-      ) => Promise<{ id: string; status: 'BACKLOG' | 'CANCELLED' | string } | null>
+      this.prisma.client.task.findFirst as unknown as (args: unknown) => Promise<{
+        id: string;
+        projectId: string;
+        createdById: string;
+        status: 'BACKLOG' | 'CANCELLED' | string;
+      } | null>
     )({
       where: { id, project: this.projectAccessFilter(scope) },
       includeDeleted: true,
@@ -518,6 +542,10 @@ export class TasksService {
     if (!existing) {
       throw new NotFoundException({ title: 'Task not found', status: 404 });
     }
+    // Restoring undoes an archive, so it takes the same row-level right:
+    // otherwise anyone who may edit tasks could bring back what a lead or
+    // the task's creator removed.
+    assertMayDeleteTask(ability, existing);
     return this.prisma.client.task.update({
       where: { id },
       data: {

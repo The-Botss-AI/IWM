@@ -25,7 +25,10 @@ import {
 import { randomBytes } from 'node:crypto';
 
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { clientVisibleWhere } from '../clients/client-visibility';
 import type { SalesActor } from '../common/decorators/sales-actor.decorator';
+import type { UserScope } from '../common/decorators/user-scope.decorator';
+import { projectAccessWhere } from '../common/project-access';
 import { orgWorkspaceMembership } from '../common/tenant-scope';
 import { livePortalContactWhere } from '../portal/portal-scope';
 import { PrismaService } from '../prisma/prisma.service';
@@ -50,6 +53,15 @@ const CLIENT_SHARE_SELECT = {
 interface DocumentAccessContext {
   userId: string;
   workspaceRole: string | undefined;
+}
+
+/**
+ * Who is filing a document under a client or project: the sales rules decide
+ * which clients they can see, the user scope which projects.
+ */
+interface DocumentFiler {
+  actor: SalesActor;
+  scope: UserScope;
 }
 
 @Injectable()
@@ -236,12 +248,21 @@ export class DocumentsService {
     return { ...rest, viewerPermission, accessGrantCount: _count.access };
   }
 
-  async create(workspaceId: string, userId: string, input: CreateDocumentInput) {
-    await this.assertWorkspaceRefs(workspaceId, {
-      parentId: input.parentId,
-      projectId: input.projectId,
-      clientId: input.clientId,
-    });
+  async create(
+    workspaceId: string,
+    userId: string,
+    input: CreateDocumentInput,
+    filer: DocumentFiler,
+  ) {
+    await this.assertWorkspaceRefs(
+      workspaceId,
+      {
+        parentId: input.parentId,
+        projectId: input.projectId,
+        clientId: input.clientId,
+      },
+      filer,
+    );
     return this.prisma.client.document.create({
       data: {
         workspaceId,
@@ -266,14 +287,27 @@ export class DocumentsService {
    * Ensures referenced parent document and project both live inside the caller's
    * workspace. Prevents cross-tenant document re-parenting or sneaking a
    * foreign-project link through the create/update payload.
+   *
+   * The client and the project must also be ones the filer can see. Filing
+   * decides which clients the share dialog offers (shareableClientWhere always
+   * offers the document's own client and its project's client), so filing
+   * under a client someone cannot see would put that client's portal, and its
+   * people, one click away. A hidden client or project answers exactly like a
+   * missing one, as the client and project pages do.
    */
   private async assertWorkspaceRefs(
     workspaceId: string,
     refs: { parentId?: string | null; projectId?: string | null; clientId?: string | null },
+    filer: DocumentFiler,
   ): Promise<void> {
     if (refs.clientId) {
       const client = await this.prisma.client.client.findFirst({
-        where: { id: refs.clientId, workspaceId, deletedAt: null },
+        where: {
+          id: refs.clientId,
+          workspaceId,
+          deletedAt: null,
+          AND: [clientVisibleWhere(filer.actor)],
+        },
         select: { id: true },
       });
       if (!client) {
@@ -299,7 +333,12 @@ export class DocumentsService {
     }
     if (refs.projectId) {
       const project = await this.prisma.client.project.findFirst({
-        where: { id: refs.projectId, workspaceId, deletedAt: null },
+        where: {
+          id: refs.projectId,
+          workspaceId,
+          deletedAt: null,
+          AND: [projectAccessWhere(filer.scope)],
+        },
         select: { id: true },
       });
       if (!project) {
@@ -317,6 +356,7 @@ export class DocumentsService {
     id: string,
     input: UpdateDocumentInput,
     ctx: DocumentAccessContext,
+    filer: DocumentFiler,
   ) {
     // Read-gate (also enforces existence). We then check write permission.
     const doc = await this.get(workspaceId, id, ctx);
@@ -327,11 +367,30 @@ export class DocumentsService {
         detail: 'You only have read access to this document.',
       });
     }
-    await this.assertWorkspaceRefs(workspaceId, {
-      parentId: input.parentId ?? null,
-      projectId: input.projectId ?? null,
-      clientId: input.clientId ?? null,
-    });
+    // Who can reach the document from outside (visibility, the public link's
+    // read-only flag and expiry) is a sharing decision: owner or workspace
+    // admin only, exactly like sharePublic / unshare. A WRITE grantee edits
+    // the content; they must not be able to lift a public link's expiry.
+    // Filing (clientId, projectId) is part of the same decision: it picks
+    // which clients the share dialog offers.
+    if (
+      input.visibility !== undefined ||
+      input.publicReadOnly !== undefined ||
+      input.publicExpiresAt !== undefined ||
+      input.clientId !== undefined ||
+      input.projectId !== undefined
+    ) {
+      await this.ensureCanManageShare(workspaceId, id, ctx);
+    }
+    await this.assertWorkspaceRefs(
+      workspaceId,
+      {
+        parentId: input.parentId ?? null,
+        projectId: input.projectId ?? null,
+        clientId: input.clientId ?? null,
+      },
+      filer,
+    );
     const data: Record<string, unknown> = {};
     for (const k of [
       'title',
@@ -640,10 +699,17 @@ export class DocumentsService {
   }
 
   /**
-   * Clients this person may pick in the share dialog: the client of the
-   * document's project and the client it is filed under, plus clients they
-   * can see under the normal sales rules (every client with full access,
-   * otherwise assigned ones) that already have portal people.
+   * Clients this person may pick in the share dialog: clients they can see
+   * under the normal sales rules (every client with full access, otherwise
+   * assigned ones) that already have portal people, plus the client the
+   * document is filed under.
+   *
+   * Only the filed client gets past the sales rules. Filing needs the owner
+   * or an admin and a client they can see (update, assertWorkspaceRefs), so
+   * it was a deliberate choice. A project's client was not chosen by whoever
+   * files a document there, since any project editor can link a project to a
+   * client; offering it to every document owner in the project put a client's
+   * portal, and its people, in front of members who cannot see that client.
    */
   private async shareableClientWhere(
     workspaceId: string,
@@ -654,8 +720,9 @@ export class DocumentsService {
       where: { id: documentId, workspaceId },
       select: { clientId: true, project: { select: { clientId: true } } },
     });
-    // The document's own clients: always offered, even with no portal people
-    // yet, so the dialog can explain why there is nobody to share with.
+    const filedIds = doc?.clientId ? [doc.clientId] : [];
+    // The document's own clients are listed even with no portal people yet,
+    // so the dialog can explain why there is nobody to share with.
     const ownClientIds = [doc?.project?.clientId, doc?.clientId].filter(
       (id): id is string => typeof id === 'string',
     );
@@ -663,9 +730,7 @@ export class DocumentsService {
       workspaceId,
       deletedAt: null,
       AND: [
-        actor.fullClients
-          ? {}
-          : { OR: [{ assigneeId: actor.userId }, { id: { in: ownClientIds } }] },
+        actor.fullClients ? {} : { OR: [{ assigneeId: actor.userId }, { id: { in: filedIds } }] },
         { OR: [{ contacts: { some: { deletedAt: null } } }, { id: { in: ownClientIds } }] },
       ],
     };

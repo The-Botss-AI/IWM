@@ -84,3 +84,26 @@ export function assertSameOrg(
     });
   }
 }
+
+/**
+ * The workspace role a new account may start with. HR may create people but
+ * not admins: the system-role check refuses ADMIN, and this one refuses a
+ * workspace OWNER or ADMIN membership, which is `manage all` in that
+ * workspace. Without it HR could create an account with a password of their
+ * choosing as owner of any workspace in the org and sign in as it. Only
+ * company `users.manage` may grant those.
+ */
+export function assertMayGrantWorkspaceRole(
+  workspaceRole: string | null | undefined,
+  actorManagesUsers: boolean,
+): void {
+  if (actorManagesUsers) return;
+  if (workspaceRole === 'OWNER' || workspaceRole === 'ADMIN') {
+    throw new ForbiddenException({
+      title: 'HR cannot grant workspace admin roles',
+      status: 403,
+      detail:
+        'HR may add new accounts to a workspace as Member or Viewer. Owner and Admin need an admin.',
+    });
+  }
+}

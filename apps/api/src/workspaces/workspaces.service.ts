@@ -33,7 +33,9 @@ import { orgWorkspaceMembership, userOrgId } from '../common/tenant-scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { SecurityAlertsService } from '../security-alerts/security-alerts.service';
+import { inviteLinkVisible, presetGrantCheckNeeded } from './invite-link-policy';
 import {
+  adminCheckedRole,
   loadEffectivePermissions,
   userHasCompanyPermission,
 } from '../common/permissions/effective-permissions';
@@ -390,6 +392,13 @@ export class WorkspacesService {
     }
 
     const wasNewUser = !existingUser;
+    // The link and code set the account's FIRST password. The inviter sees
+    // them only for an account they just created; for anyone else (a person
+    // still pending in another workspace, possibly an org admin) they go to
+    // that person's inbox and nowhere else. See `mayRevealInviteLink`.
+    const revealLink =
+      invitationUrl !== null &&
+      (wasNewUser || (await this.mayRevealInviteLink(invitedById, user.id, workspaceId)));
 
     this.logger.log(
       `[INVITE] workspace=${workspace.name} (${workspaceId}) email=${email} role=${inviteRole} ` +
@@ -443,8 +452,8 @@ export class WorkspacesService {
         email: user.email,
         image: user.image,
       },
-      invitationUrl,
-      invitationCode,
+      invitationUrl: revealLink ? invitationUrl : null,
+      invitationCode: revealLink ? invitationCode : null,
       wasNewUser,
     };
   }
@@ -517,6 +526,10 @@ export class WorkspacesService {
       organizationId: workspace.organizationId,
     });
 
+    // Same rule as `inviteMember`: a fresh link goes back to the caller only
+    // when they could have created this account themselves.
+    const revealLink = await this.mayRevealInviteLink(actingUserId, membership.userId, workspaceId);
+
     return {
       membership: toMembershipWithUser(membership as unknown as RawMembershipWithUser),
       user: {
@@ -525,10 +538,32 @@ export class WorkspacesService {
         email: membership.user.email,
         image: membership.user.image,
       },
-      invitationUrl,
-      invitationCode,
+      invitationUrl: revealLink ? invitationUrl : null,
+      invitationCode: revealLink ? invitationCode : null,
       wasNewUser: false,
     };
+  }
+
+  /** Gathers the inputs of `inviteLinkVisible` (invite-link-policy.ts). */
+  private async mayRevealInviteLink(
+    actorId: string,
+    inviteeId: string,
+    workspaceId: string,
+  ): Promise<boolean> {
+    if (await userHasCompanyPermission(actorId, 'users.manage')) return true;
+    const [memberships, effective] = await Promise.all([
+      this.prisma.client.workspaceMembership.findMany({
+        where: { userId: inviteeId },
+        select: { workspaceId: true },
+      }),
+      loadEffectivePermissions(inviteeId, null),
+    ]);
+    return inviteLinkVisible({
+      actorManagesUsers: false,
+      workspaceId,
+      inviteeWorkspaceIds: memberships.map((m) => m.workspaceId),
+      inviteeCompanyPermissions: effective.company,
+    });
   }
 
   /**
@@ -621,7 +656,15 @@ export class WorkspacesService {
     // The OWNER role stays protected by the `membership.role === 'OWNER'` and
     // `input.role === 'OWNER'` guards above, so an admin still cannot remove or
     // mint an owner.
-    if (input.customRoleId === undefined || input.customRoleId === null) {
+    // The base role is checked whenever it changes, custom role or not; see
+    // `presetGrantCheckNeeded`.
+    if (
+      presetGrantCheckNeeded({
+        customRoleId: input.customRoleId,
+        nextRole: input.role,
+        currentRole: membership.role,
+      })
+    ) {
       await this.assertCanGrantPreset(workspaceId, actingUserId, input.role);
     }
     // Custom workspace role: must be a live WORKSPACE role of this org, and a
@@ -766,13 +809,16 @@ export class WorkspacesService {
    * sees of a project).
    */
   async canAdminister(workspaceId: string, userId: string): Promise<boolean> {
-    try {
-      const role = await this.getActorRoleOrThrow(workspaceId, userId);
-      return role === 'OWNER' || role === 'ADMIN';
-    } catch (err) {
-      if (err instanceof ForbiddenException) return false;
-      throw err;
-    }
+    // An org admin administers every workspace of their organization.
+    if (await this.isOrgAdminFor(workspaceId, userId)) return true;
+    const membership = await orgWorkspaceMembership(this.prisma, userId, workspaceId);
+    if (!membership) return false;
+    // Base OWNER / ADMIN counts only with every workspace permission: under a
+    // narrower custom role (or a denying override) it no longer decides what
+    // a client sees (see adminCheckedRole).
+    const effective = await loadEffectivePermissions(userId, workspaceId);
+    const role = adminCheckedRole(membership.role, effective);
+    return role === 'OWNER' || role === 'ADMIN';
   }
 
   /**

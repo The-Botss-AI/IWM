@@ -25,17 +25,18 @@ export function hashPassword(password: string): string {
 export function verifyPassword(hash: string, password: string): boolean {
   if (!hash.startsWith(PREFIX)) return false;
   const rest = hash.slice(PREFIX.length);
-  const [saltHex, hashHex] = rest.split('$');
-  if (!saltHex || !hashHex) return false;
-  let salt: Buffer;
-  let expected: Buffer;
-  try {
-    salt = Buffer.from(saltHex, 'hex');
-    expected = Buffer.from(hashHex, 'hex');
-  } catch {
-    return false;
-  }
-  const actual = scryptSync(password, salt, expected.length, {
+  const [saltHex, hashHex, extra] = rest.split('$');
+  // Exactly the shape hashPassword writes: a salt of 16+ bytes and a 64-byte
+  // key, as hex. Buffer.from(_, 'hex') silently drops invalid characters, so
+  // a malformed stored hash such as `scrypt$00$zz` used to decode to an EMPTY
+  // expected key - and two empty keys compare equal, so ANY password signed
+  // in to that account.
+  if (extra !== undefined || !saltHex || !hashHex) return false;
+  if (!/^(?:[0-9a-f]{2}){16,}$/i.test(saltHex)) return false;
+  if (!/^[0-9a-f]{128}$/i.test(hashHex)) return false;
+  const salt = Buffer.from(saltHex, 'hex');
+  const expected = Buffer.from(hashHex, 'hex');
+  const actual = scryptSync(password, salt, SCRYPT_PARAMS.keylen, {
     N: SCRYPT_PARAMS.N,
     r: SCRYPT_PARAMS.r,
     p: SCRYPT_PARAMS.p,

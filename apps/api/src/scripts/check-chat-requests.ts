@@ -473,13 +473,11 @@ function fakePrisma(store: Store) {
 function fakeRedis() {
   const counters = new Map<string, number>();
   const redis = {
-    client: {
-      incr: async (key: string) => {
-        const n = (counters.get(key) ?? 0) + 1;
-        counters.set(key, n);
-        return n;
-      },
-      expire: async () => 1,
+    // RedisService.hitWindow: one hit on a fixed-window counter.
+    hitWindow: async (key: string) => {
+      const n = (counters.get(key) ?? 0) + 1;
+      counters.set(key, n);
+      return n;
     },
   };
   return redis as unknown as RedisService;

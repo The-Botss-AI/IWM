@@ -802,7 +802,17 @@ export class MailSendService {
       // envelope/From stays the user's address (the relay must be authorized
       // to send for the domain via SPF/DKIM). With no relay configured this
       // falls back to the account SMTP, so existing setups are unchanged.
-      const relay = resolveSmtpRelay();
+      // The relay only carries an address the platform can vouch for; see
+      // `relayMayCarry`. Anything else goes out through its own SMTP login.
+      const configuredRelay = resolveSmtpRelay();
+      const owner = configuredRelay
+        ? await this.prisma.client.user.findUnique({
+            where: { id: row.account.userId },
+            select: { email: true },
+          })
+        : null;
+      const relay =
+        configuredRelay && relayMayCarry(fromEmail, owner?.email) ? configuredRelay : null;
       const smtp = relay ?? {
         host: row.account.smtpHost,
         port: row.account.smtpPort,
@@ -903,6 +913,34 @@ export class MailSendService {
       throw err;
     }
   }
+}
+
+/**
+ * May the platform relay carry mail sent as `fromEmail`?
+ *
+ * Mailbox addresses are not verified: any IMAP/SMTP login the user types in
+ * passes the check, including one on their own server. The relay, though, is
+ * the platform's authenticated sender, so through it a mailbox claiming
+ * ceo@company.example would be delivered with the company's SPF and DKIM.
+ * It therefore carries only the owner's own sign-in address (vouched for by
+ * the invite they accepted or the admin who created the account) and the
+ * domains the operator lists in `MAIL_RELAY_SENDER_DOMAINS` (comma
+ * separated, e.g. a shared info@ mailbox's domain). Every other mailbox sends
+ * through its own SMTP login, exactly as with no relay configured.
+ */
+export function relayMayCarry(
+  fromEmail: string,
+  ownerEmail: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const from = fromEmail.trim().toLowerCase();
+  if (ownerEmail && from === ownerEmail.trim().toLowerCase()) return true;
+  const domain = from.slice(from.lastIndexOf('@') + 1);
+  if (!domain || !from.includes('@')) return false;
+  return (env.MAIL_RELAY_SENDER_DOMAINS ?? '')
+    .split(',')
+    .map((d) => d.trim().toLowerCase().replace(/^@/, ''))
+    .some((d) => d !== '' && d === domain);
 }
 
 /**

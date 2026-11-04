@@ -9,9 +9,11 @@
  * cares about. We mirror chat + call events into this client-side store so
  * the bell's UI doesn't have to know which kind came from where.
  *
- * Storage: a small ring buffer in localStorage keyed by the signed-in
- * user. Survives reloads but never crosses workspaces / sessions. Capped at
- * 100 rows so a chatty week of activity doesn't bloat localStorage.
+ * Storage: a small ring buffer in localStorage, bound to the signed-in user
+ * by an owner key ({@link claimInAppNotificationsFor}): a different person
+ * signing in on this browser starts empty, even when the previous session
+ * expired without a sign-out. Capped at 100 rows so a chatty week of
+ * activity doesn't bloat localStorage.
  *
  * Broadcasting: a custom event lets the bell re-render when a new row
  * lands, without prop drilling through the layout tree. `storage` is also
@@ -19,8 +21,27 @@
  */
 
 const KEY = 'botss.in-app-notifications.v1';
+const OWNER_KEY = 'botss.in-app-notifications.owner';
 const EVT = 'botss-in-app-notifications';
 const MAX = 100;
+
+/**
+ * Bind the buffer to `userId`. The rows are chat previews and call banners;
+ * if they belong to someone else (or to nobody known, from before this check
+ * existed) they are dropped. Returns true when the owner changed, so callers
+ * can drop the rest of the previous person's device data too.
+ */
+export function claimInAppNotificationsFor(userId: string): boolean {
+  if (typeof window === 'undefined' || !userId) return false;
+  try {
+    if (window.localStorage.getItem(OWNER_KEY) === userId) return false;
+    safeWrite([]);
+    window.localStorage.setItem(OWNER_KEY, userId);
+  } catch {
+    // Storage unavailable: nothing persisted to leak either.
+  }
+  return true;
+}
 
 let cachedNotifications: InAppNotification[] | null = null;
 

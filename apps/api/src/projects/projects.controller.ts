@@ -52,10 +52,11 @@ export class ProjectsController {
   @RequireAbility('update', 'Project')
   update(
     @RequestUserScope() scope: UserScope,
+    @RequestAbility() ability: AppAbility,
     @Param('id', new ZodValidationPipe(cuid)) id: string,
     @Body(new ZodValidationPipe(updateProjectSchema)) input: UpdateProjectInput,
   ) {
-    return this.projects.update(scope, id, input);
+    return this.projects.update(scope, ability, id, input);
   }
 
   @Delete(':id')
@@ -91,17 +92,19 @@ export class ProjectsController {
   @RequireAbility('update', 'Project')
   archive(
     @RequestUserScope() scope: UserScope,
+    @RequestAbility() ability: AppAbility,
     @Param('id', new ZodValidationPipe(cuid)) id: string,
   ) {
-    return this.projects.archive(scope, id);
+    return this.projects.archive(scope, ability, id);
   }
 
   @Post(':id/restore')
   @RequireAbility('update', 'Project')
   restore(
     @RequestUserScope() scope: UserScope,
+    @RequestAbility() ability: AppAbility,
     @Param('id', new ZodValidationPipe(cuid)) id: string,
   ) {
-    return this.projects.restore(scope, id);
+    return this.projects.restore(scope, ability, id);
   }
 }

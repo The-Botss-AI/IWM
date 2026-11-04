@@ -64,8 +64,9 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const targetUrl = (event.notification.data && event.notification.data.url) || '/';
-  const absoluteUrl = new URL(targetUrl, self.location.origin).href;
+  // "Decline" on a call banner dismisses it; it must not open or focus the app.
+  if (event.action === 'decline') return;
+  const absoluteUrl = sameOriginUrl(event.notification.data && event.notification.data.url);
 
   event.waitUntil(
     (async () => {
@@ -106,6 +107,21 @@ self.addEventListener('notificationclick', (event) => {
     })(),
   );
 });
+
+/**
+ * The page a banner opens, always on this app's own origin. A payload URL for
+ * another site (or a `javascript:` / `data:` one) falls back to the app root,
+ * so a notification can never send the user somewhere else.
+ */
+function sameOriginUrl(raw) {
+  try {
+    const url = new URL(typeof raw === 'string' && raw ? raw : '/', self.location.origin);
+    if (url.origin === self.location.origin) return url.href;
+  } catch (_err) {
+    /* malformed: fall through */
+  }
+  return new URL('/', self.location.origin).href;
+}
 
 /** Defensive JSON parser - push services may strip or corrupt payloads. */
 function parsePushPayload(event) {
