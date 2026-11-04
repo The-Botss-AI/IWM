@@ -5,9 +5,9 @@ import type { Prisma } from '@botss/database';
  * Who a chat room's admins are, kept consistent under concurrency.
  *
  * A room with no ADMIN row falls back to "every member is an admin"
- * (assertRoomAdmin, for rooms older than roles), so every path that can take
- * the last admin away - a demotion, a removal, leaving, deleting the user -
- * serialises on the room row and makes sure an admin remains.
+ * (assertRoomAdmin, for rooms older than roles). Demoting, removing and
+ * leaving (ChatService) and deleting a user (AdminUsersService.remove)
+ * serialise on the room row and keep an admin in the room.
  */
 
 /**
@@ -56,23 +56,39 @@ export function assertRoomAdminRows(
  * Before a user is hard-deleted: in every room where they are the only
  * ADMIN, promote the oldest other participant (leaveRoom's successor rule).
  * The participant cascade would otherwise leave those rooms with no ADMIN
- * row. Rooms are locked one at a time, in id order, like the chat paths.
+ * row. Runs inside the delete's transaction, before the delete.
+ *
+ * Locks come first, in this order:
+ * 1. The user row. A message send by this user holds KEY SHARE on it and
+ *    then updates the room; taking the user first makes such a send finish
+ *    or wait instead of deadlocking with the room locks. It also holds off
+ *    new participant rows for them (that insert needs KEY SHARE on it too).
+ * 2. Every room they are in, in one ordered statement, so a demotion, removal
+ *    or leave there waits for this delete. A room where they are only a
+ *    MEMBER is locked as well: leaving could otherwise promote them after
+ *    the admin rows below were read. DMs are skipped: they have no admin
+ *    actions, and the remaining participant passes the participant fallback.
  */
 export async function handOverSoleAdminRooms(
   tx: Prisma.TransactionClient,
   userId: string,
 ): Promise<void> {
-  const adminOf = await tx.chatRoomParticipant.findMany({
-    where: { userId, role: 'ADMIN' },
-    select: { roomId: true },
+  await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId} FOR UPDATE`;
+  const rooms = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT r.id FROM "ChatRoom" r
+    WHERE r.type <> 'DM'
+      AND r.id IN (SELECT p."roomId" FROM "ChatRoomParticipant" p WHERE p."userId" = ${userId})
+    ORDER BY r.id
+    FOR NO KEY UPDATE OF r`;
+  if (rooms.length === 0) return;
+  const roomIds = rooms.map((r) => r.id);
+  const admins = await tx.chatRoomParticipant.findMany({
+    where: { roomId: { in: roomIds }, role: 'ADMIN' },
+    select: { roomId: true, userId: true },
   });
-  for (const roomId of adminOf.map((r) => r.roomId).sort()) {
-    await lockRoomAdmins(tx, roomId);
-    const admins = await tx.chatRoomParticipant.findMany({
-      where: { roomId, role: 'ADMIN' },
-      select: { userId: true },
-    });
-    if (admins.some((a) => a.userId !== userId)) continue;
+  for (const roomId of roomIds) {
+    const here = admins.filter((a) => a.roomId === roomId);
+    if (here.length === 0 || here.some((a) => a.userId !== userId)) continue;
     const successor = await tx.chatRoomParticipant.findFirst({
       where: { roomId, userId: { not: userId } },
       orderBy: { joinedAt: 'asc' },

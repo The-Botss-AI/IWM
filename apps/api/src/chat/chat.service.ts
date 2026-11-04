@@ -1998,9 +1998,9 @@ export class ChatService {
       assertRoomAdminRows(rows, actingUserId);
       await tx.chatRoomParticipant.deleteMany({ where: { roomId, userId: targetUserId } });
     });
-    // Announced only once the removal has happened. Authored by the actor,
-    // so the remaining members see it; the removed user has already dropped
-    // out of the room (same as Slack).
+    // Announced only once the removal has happened, so a refused one never
+    // is. Authored by the actor; the controller broadcasts it before it
+    // evicts the removed person's socket, so they see it too.
     const systemMessage = await this.recordSystemMessage(roomId, actingUserId, {
       event: 'removed',
       target: nameOf(targetUserId),
