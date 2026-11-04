@@ -523,7 +523,9 @@ export type ParsedShareCard = {
  * message, so it is dropped rather than rendered as a clickable link.
  * Browsers delete tabs and newlines while parsing a URL (`/\t/evil.example`
  * becomes `//evil.example`), so control characters and spaces are refused
- * too, and the link must still resolve to the same origin.
+ * too, and the link must still resolve to the same origin. Dot segments can
+ * fold a path into `//host` (`/..//evil.example`), which is another origin as
+ * soon as it is used as a path, so that resolved shape is refused as well.
  */
 const SHARE_LINK_BASE = 'https://app.invalid';
 
@@ -531,7 +533,8 @@ export function shareCardHref(link: unknown): string {
   if (typeof link !== 'string') return '#';
   if (!/^\/(?![/\\])[^\\\u0000- \u007f]*$/.test(link)) return '#';
   try {
-    if (new URL(link, SHARE_LINK_BASE).origin !== SHARE_LINK_BASE) return '#';
+    const resolved = new URL(link, SHARE_LINK_BASE);
+    if (resolved.origin !== SHARE_LINK_BASE || resolved.pathname.startsWith('//')) return '#';
   } catch {
     return '#';
   }

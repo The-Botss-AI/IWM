@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Hash, MessageSquare, Users, Volume2 } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useMemo } from 'react';
+import { ApiError } from '@botss/api-client';
 import type { InvitePreview } from '@botss/shared-types';
 
 import { Button } from '@/components/ui/button';
@@ -42,8 +43,10 @@ export default function InvitePage() {
     meta: { errorTitle: "Couldn't accept invite" },
   });
 
+  // Members go straight to the chat. Once only: `accept` is a new object on
+  // every render, so without the idle check a failed accept retried forever.
   useEffect(() => {
-    if (preview.data?.alreadyJoined && !accept.isPending) {
+    if (preview.data?.alreadyJoined && accept.isIdle) {
       void accept.mutate();
     }
   }, [preview.data?.alreadyJoined, accept]);
@@ -52,7 +55,13 @@ export default function InvitePage() {
     return <LoadingState />;
   }
   if (preview.isError || !preview.data) {
-    return <UnavailableState message="This invite is no longer valid." />;
+    // A refusal says why (another organization, not in the channel's
+    // workspace); a dead or unknown code reads as no longer valid.
+    const refused =
+      preview.error instanceof ApiError && preview.error.status === 403
+        ? preview.error.message
+        : null;
+    return <UnavailableState message={refused ?? 'This invite is no longer valid.'} />;
   }
   return (
     <InviteCard
