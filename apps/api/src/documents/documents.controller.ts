@@ -26,6 +26,7 @@ import { CurrentUser, type AuthedUser } from '../common/decorators/current-user.
 import { CurrentWorkspaceId } from '../common/decorators/current-workspace.decorator';
 import { RequireAbility } from '../common/decorators/required-ability.decorator';
 import { CurrentSalesActor, type SalesActor } from '../common/decorators/sales-actor.decorator';
+import { RequestUserScope, type UserScope } from '../common/decorators/user-scope.decorator';
 import type { RequestExtensions } from '../common/guards/auth.guard';
 import { requestRoleForAdminChecks } from '../common/permissions/effective-permissions';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
@@ -62,9 +63,11 @@ export class DocumentsController {
   create(
     @CurrentWorkspaceId() workspaceId: string,
     @CurrentUser() user: AuthedUser,
+    @CurrentSalesActor() actor: SalesActor,
+    @RequestUserScope() scope: UserScope,
     @Body(new ZodValidationPipe(createDocumentSchema)) input: CreateDocumentInput,
   ) {
-    return this.documents.create(workspaceId, user.id, input);
+    return this.documents.create(workspaceId, user.id, input, { actor, scope });
   }
 
   @Get(':id')
@@ -83,11 +86,16 @@ export class DocumentsController {
   update(
     @CurrentWorkspaceId() workspaceId: string,
     @CurrentUser() user: AuthedUser,
+    @CurrentSalesActor() actor: SalesActor,
+    @RequestUserScope() scope: UserScope,
     @Req() req: Request & RequestExtensions,
     @Param('id', new ZodValidationPipe(cuid)) id: string,
     @Body(new ZodValidationPipe(updateDocumentSchema)) input: UpdateDocumentInput,
   ) {
-    return this.documents.update(workspaceId, id, input, ctxOf(req, workspaceId, user.id));
+    return this.documents.update(workspaceId, id, input, ctxOf(req, workspaceId, user.id), {
+      actor,
+      scope,
+    });
   }
 
   @Post(':id/share')
