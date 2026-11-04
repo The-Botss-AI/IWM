@@ -96,19 +96,23 @@ app.on('web-contents-created', (_event, contents) => {
   });
   // Full-page navigations to a foreign origin (e.g. an OAuth provider link the
   // user clicked) open externally instead of replacing the app shell.
-  contents.on('will-navigate', (event, url) => {
-    if (!isAppOrigin(url)) {
-      event.preventDefault();
-      openExternalSafely(url);
+  // Both handlers read the event's details object: the positional url and
+  // isMainFrame arguments are deprecated, and if they went away every
+  // navigation would read as off-origin.
+  contents.on('will-navigate', (details) => {
+    if (!isAppOrigin(details.url)) {
+      details.preventDefault();
+      openExternalSafely(details.url);
     }
   });
-  contents.on('will-redirect', (event, url, _isInPlace, isMainFrame) => {
-    if (isAppOrigin(url)) return;
-    event.preventDefault();
+  contents.on('will-redirect', (details) => {
+    if (isAppOrigin(details.url)) return;
+    details.preventDefault();
     // A page redirecting off the app (a download, an outside sign-in or
     // billing page) opens in the browser, as a link does in will-navigate.
-    // A frame's redirect is only stopped: an embed must not open browser tabs.
-    if (isMainFrame) openExternalSafely(url);
+    // A frame's redirect is only stopped, so an embed cannot use a redirect
+    // to open a browser tab.
+    if (details.isMainFrame) openExternalSafely(details.url);
   });
   contents.on('will-attach-webview', (event) => event.preventDefault());
 });
