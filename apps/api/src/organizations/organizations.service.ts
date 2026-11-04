@@ -935,11 +935,16 @@ export class OrganizationsService {
    * workspace might already own that handle. Try the org slug first, then
    * append a short suffix; bail after a few attempts rather than looping
    * forever.
+   *
+   * Checked on the raw client, like allocateOrgSlug: a deleted workspace
+   * still holds its slug in the unique index. Through the soft-delete client
+   * it looked free, the create hit P2002, and public signup answered 409 only
+   * for addresses with no account, which told them apart.
    */
   private async allocateWorkspaceSlug(base: string): Promise<string> {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const candidate = attempt === 0 ? base : `${base}-${randomBytes(2).toString('hex')}`;
-      const clash = await this.prisma.client.workspace.findUnique({
+      const clash = await this.prisma.raw.workspace.findUnique({
         where: { slug: candidate },
         select: { id: true },
       });

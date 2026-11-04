@@ -37,6 +37,7 @@ import {
   BadRequestException,
   type ExecutionContext,
   ForbiddenException,
+  NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { defineAbilityFor, hashPassword, presetPermissions, verifyPassword } from '@botss/auth';
@@ -54,6 +55,7 @@ import {
 import { assertMayGrantWorkspaceRole } from '../admin/admin-user-policy';
 import { ChatService } from '../chat/chat.service';
 import { inviteKeepsOrganization } from '../chat/cross-org-block';
+import { handOverSoleAdminRooms } from '../chat/room-admins';
 import { isAllowedSocketOrigin, socketOriginGate } from '../chat/socket-origin';
 import {
   hashLinkToken,
@@ -68,11 +70,14 @@ import { SKIP_PERMISSIONS_KEY } from '../common/decorators/skip-permissions.deco
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { adminCheckedRole } from '../common/permissions/effective-permissions';
 import { abilityRow, assertCanUpdateProject } from '../common/permissions/request-ability';
+import { projectAccessWhere } from '../common/project-access';
+import { DocumentsService } from '../documents/documents.service';
 import { LeadsService } from '../leads/leads.service';
 import { relayMayCarry } from '../mail/mail-send.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
+import { mayReadSourceDocument } from '../signatures/signature-visibility';
 import { TasksService } from '../tasks/tasks.service';
 import { UsersService } from '../users/users.service';
 import { inviteLinkVisible, presetGrantCheckNeeded } from '../workspaces/invite-link-policy';
@@ -327,36 +332,48 @@ async function main(): Promise<void> {
 
   // 9. Rate-limit window counter ---------------------------------------------
   {
-    const calls: unknown[][] = [];
-    let ttl = 42;
-    const chain = {
-      set: (...a: unknown[]) => (calls.push(['set', ...a]), chain),
-      incr: (...a: unknown[]) => (calls.push(['incr', ...a]), chain),
-      ttl: (...a: unknown[]) => (calls.push(['ttl', ...a]), chain),
-      exec: async () => [
-        [null, 'OK'],
-        [null, 3],
-        [null, ttl],
-      ],
-    };
+    // A tiny Redis: INCR and EXPIRE (with NX) as Redis 7 runs them, applied
+    // in order when the MULTI executes. ttl -1 means no expiry.
+    const store = new Map<string, { value: number; ttl: number }>();
     const client = {
       status: 'ready',
-      multi: () => chain,
-      expire: async (...a: unknown[]) => (calls.push(['expire', ...a]), 1),
+      multi: () => {
+        const ops: Array<() => unknown> = [];
+        const chain = {
+          incr: (key: string) => {
+            ops.push(() => {
+              const row = store.get(key) ?? { value: 0, ttl: -1 };
+              row.value += 1;
+              store.set(key, row);
+              return row.value;
+            });
+            return chain;
+          },
+          expire: (key: string, seconds: number, flag?: string) => {
+            ops.push(() => {
+              const row = store.get(key);
+              if (!row || (flag === 'NX' && row.ttl !== -1)) return 0;
+              row.ttl = seconds;
+              return 1;
+            });
+            return chain;
+          },
+          exec: async () => ops.map((op) => [null, op()]),
+        };
+        return chain;
+      },
     };
     const redis = new RedisService({ get: () => undefined } as never);
     (redis as unknown as { _client: unknown })._client = client;
-    assert.equal(await redis.hitWindow('rate:k', 60), 3);
-    assert.deepEqual(calls, [
-      ['set', 'rate:k', '0', 'EX', 60, 'NX'],
-      ['incr', 'rate:k'],
-      ['ttl', 'rate:k'],
-    ]);
+    assert.equal(await redis.hitWindow('rate:k', 60), 1);
+    assert.deepEqual(store.get('rate:k'), { value: 1, ttl: 60 }, 'a new counter gets its window');
+    store.get('rate:k')!.ttl = 17;
+    assert.equal(await redis.hitWindow('rate:k', 60), 2);
+    assert.equal(store.get('rate:k')!.ttl, 17, 'a running window is not extended');
     // A counter the old INCR-then-EXPIRE left without a TTL gets its window.
-    calls.length = 0;
-    ttl = -1;
-    assert.equal(await redis.hitWindow('rate:k', 60), 3);
-    assert.deepEqual(calls.at(-1), ['expire', 'rate:k', 60]);
+    store.set('rate:old', { value: 99, ttl: -1 });
+    assert.equal(await redis.hitWindow('rate:old', 60), 100);
+    assert.equal(store.get('rate:old')!.ttl, 60, 'a counter stuck without a TTL heals');
     (redis as unknown as { _client: unknown })._client = { status: 'reconnecting' };
     await assert.rejects(redis.hitWindow('rate:k', 60), ServiceUnavailableException);
   }
@@ -551,6 +568,7 @@ async function main(): Promise<void> {
   {
     const orgOf: Record<string, string> = { [ME]: 'org-a', [OTHER]: 'org-b' };
     let member = false;
+    let expiresAt: Date | null = null;
     const invitePrisma = {
       client: {
         chatRoomInvite: {
@@ -561,7 +579,7 @@ async function main(): Promise<void> {
             createdById: OTHER,
             maxUses: null,
             usedCount: 0,
-            expiresAt: null,
+            expiresAt,
             room: { id: 'r1', name: 'Secret', type: 'GROUP', workspaceId: null, deletedAt: null },
             createdBy: { id: OTHER, name: 'Other', email: 'other@b.example', image: null },
           }),
@@ -588,6 +606,13 @@ async function main(): Promise<void> {
       alreadyJoined: true,
       systemMessage: null,
     });
+    // Membership comes before expiry too: the invite page accepts again on
+    // its own for members, and an error there made it retry in a loop.
+    expiresAt = new Date(Date.now() - 60_000);
+    assert.equal((await invites.acceptInvite(ME, 'code')).alreadyJoined, true);
+    member = false;
+    await assert.rejects(invites.acceptInvite(ME, 'code'), BadRequestException);
+    expiresAt = null;
 
     // Admin changes count and write under the room lock, in one transaction.
     const steps: string[] = [];
@@ -607,8 +632,14 @@ async function main(): Promise<void> {
     const roomPrisma = {
       client: {
         chatRoom: { findFirst: async () => ({ id: 'r1', type: 'GROUP', createdById: null }) },
-        chatRoomParticipant: { findUnique: async () => ({ id: 'p1' }) },
-        user: { findUnique: async () => ({ name: 'Me', email: 'me@a.example' }) },
+        chatRoomParticipant: {
+          findUnique: async () => ({ id: 'p1' }),
+          findFirst: async () => ({ id: 'p2' }),
+        },
+        user: {
+          findUnique: async () => ({ name: 'Me', email: 'me@a.example' }),
+          findMany: async () => [],
+        },
         $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
       },
     } as unknown as PrismaService;
@@ -616,15 +647,33 @@ async function main(): Promise<void> {
     const stub = rooms as unknown as Record<string, unknown>;
     stub['assertRoomAdmin'] = async () => undefined;
     stub['assertRoomMember'] = async () => undefined;
-    stub['recordSystemMessage'] = async () => null;
+    stub['recordSystemMessage'] = async () => (steps.push('announce'), null);
 
-    admins = [{ userId: OTHER, role: 'ADMIN' }];
+    // The sole admin cannot step down.
+    admins = [{ userId: ME, role: 'ADMIN' }];
     await assert.rejects(
-      rooms.updateParticipantRole(ME, 'r1', OTHER, 'MEMBER'),
+      rooms.updateParticipantRole(ME, 'r1', ME, 'MEMBER'),
       BadRequestException,
       'the last admin stays one',
     );
     assert.deepEqual(steps, ['lock', 'read']);
+
+    // Rights are checked again under the lock: an admin demoted a moment
+    // ago (here: no longer ADMIN) can neither change roles nor remove anyone.
+    steps.length = 0;
+    admins = [
+      { userId: OTHER, role: 'ADMIN' },
+      { userId: ME, role: 'MEMBER' },
+    ];
+    await assert.rejects(rooms.updateParticipantRole(ME, 'r1', 'cmx', 'ADMIN'), ForbiddenException);
+    await assert.rejects(rooms.removeParticipant(ME, 'r1', OTHER), ForbiddenException);
+    assert.deepEqual(steps, ['lock', 'read', 'lock', 'read'], 'nothing written or announced');
+
+    // A removal runs under the lock and is announced only once it happened.
+    steps.length = 0;
+    admins = [{ userId: ME, role: 'ADMIN' }];
+    await rooms.removeParticipant(ME, 'r1', OTHER);
+    assert.deepEqual(steps, ['lock', 'read', 'leave', 'announce']);
 
     steps.length = 0;
     admins = [
@@ -632,7 +681,206 @@ async function main(): Promise<void> {
       { userId: OTHER, role: 'MEMBER' },
     ];
     await rooms.leaveRoom(ME, 'r1');
-    assert.deepEqual(steps, ['lock', 'read', 'leave', `promote:${OTHER}`]);
+    assert.deepEqual(steps, ['announce', 'lock', 'read', 'leave', `promote:${OTHER}`]);
+
+    // A room with no ADMIN row: its own members manage it (rooms older than
+    // roles), but an open channel's same-org visitors, who need no row to
+    // read and post, do not.
+    let rows: { userId: string; role: string }[] = [];
+    const legacy = new ChatService(
+      {
+        client: {
+          chatRoom: {
+            findFirst: async () => ({
+              id: 'r1',
+              type: 'TEXT_CHANNEL',
+              isPrivate: false,
+              workspace: { organizationId: 'org-a' },
+              participants: rows.filter((r) => r.userId === ME),
+            }),
+          },
+          chatRoomParticipant: { findMany: async () => rows },
+        },
+      } as unknown as PrismaService,
+      {} as never,
+    );
+    (legacy as unknown as { getUserOrganizationId: () => Promise<string> })[
+      'getUserOrganizationId'
+    ] = async () => 'org-a';
+    await assert.rejects(legacy.assertRoomAdmin(ME, 'r1'), ForbiddenException);
+    rows = [{ userId: ME, role: 'MEMBER' }];
+    await legacy.assertRoomAdmin(ME, 'r1');
+
+    // Hard-deleting a room's only admin hands the room to its oldest other
+    // participant first; a room with another admin is left alone.
+    const people: Record<string, Array<{ userId: string; role: string; joinedAt: number }>> = {
+      solo: [
+        { userId: ME, role: 'ADMIN', joinedAt: 1 },
+        { userId: 'cmlate', role: 'MEMBER', joinedAt: 3 },
+        { userId: OTHER, role: 'MEMBER', joinedAt: 2 },
+      ],
+      shared: [
+        { userId: ME, role: 'ADMIN', joinedAt: 1 },
+        { userId: OTHER, role: 'ADMIN', joinedAt: 2 },
+      ],
+    };
+    const handover: string[] = [];
+    type ParticipantWhere = { roomId?: string; userId?: string | { not: string }; role?: string };
+    const matches = (p: { userId: string; role: string }, w: ParticipantWhere) =>
+      (w.role === undefined || p.role === w.role) &&
+      (w.userId === undefined ||
+        (typeof w.userId === 'string' ? p.userId === w.userId : p.userId !== w.userId.not));
+    await handOverSoleAdminRooms(
+      {
+        $queryRaw: async () => (handover.push('lock'), []),
+        chatRoomParticipant: {
+          findMany: async (a: { where: ParticipantWhere }) =>
+            Object.entries(people).flatMap(([roomId, list]) =>
+              a.where.roomId === undefined || a.where.roomId === roomId
+                ? list.filter((p) => matches(p, a.where)).map((p) => ({ ...p, roomId }))
+                : [],
+            ),
+          findFirst: async (a: { where: ParticipantWhere }) =>
+            [...people[a.where.roomId!]!]
+              .sort((x, y) => x.joinedAt - y.joinedAt)
+              .find((p) => matches(p, a.where)) ?? null,
+          update: async (a: { where: { roomId_userId: { roomId: string; userId: string } } }) => {
+            const { roomId, userId } = a.where.roomId_userId;
+            handover.push(`promote:${roomId}:${userId}`);
+          },
+        },
+      } as never,
+      ME,
+    );
+    assert.deepEqual(handover, ['lock', 'lock', `promote:solo:${OTHER}`]);
+  }
+
+  // 17. Filing a document ------------------------------------------------------
+  {
+    const ALICE = 'cmalice00000000000000alice';
+    const BOB = 'cmbob00000000000000000bob';
+    const CLIENT_X = 'cmclientx000000000000000x'; // assigned to Alice
+    const CLIENT_Y = 'cmclienty000000000000000y'; // assigned to someone else
+    const assigneeOf: Record<string, string> = { [CLIENT_X]: ALICE, [CLIENT_Y]: OTHER };
+    const projectWheres: Array<{ where: { AND: unknown[] } }> = [];
+    const writes: unknown[] = [];
+    const docs = new DocumentsService(
+      {
+        client: {
+          // Alice owns d1; Bob holds a WRITE grant on it.
+          document: {
+            findFirst: async () => ({
+              id: 'd1',
+              workspaceId: WS,
+              createdById: ALICE,
+              _count: { access: 1 },
+            }),
+            update: async (a: unknown) => (writes.push(a), { id: 'd1' }),
+            create: async (a: unknown) => (writes.push(a), { id: 'd2' }),
+          },
+          documentAccess: { findUnique: async () => ({ permission: 'WRITE' }) },
+          // Applies clientVisibleWhere's assignee rule, as Postgres would.
+          client: {
+            findFirst: async (a: { where: { id: string; AND: Array<{ assigneeId?: string }> } }) =>
+              assigneeOf[a.where.id] === a.where.AND[0]!.assigneeId ? { id: a.where.id } : null,
+          },
+          // The filer cannot see the project.
+          project: {
+            findFirst: async (a: { where: { AND: unknown[] } }) => (projectWheres.push(a), null),
+          },
+        },
+      } as unknown as PrismaService,
+      {} as never,
+    );
+    const filer = (userId: string) => ({
+      actor: {
+        userId,
+        workspaceId: WS,
+        fullAccess: false,
+        fullLeads: false,
+        fullClients: false,
+        financeAccess: false,
+      },
+      scope: {
+        userId,
+        workspaceIds: [WS],
+        projectIds: [],
+        currentWorkspaceId: WS,
+        workspaceRole: 'MEMBER',
+        seesEveryProject: false,
+      },
+    });
+    const ctx = (userId: string) => ({ userId, workspaceRole: 'MEMBER' });
+
+    // A WRITE grantee edits the content but cannot re-file the document:
+    // filing picks which clients the owner's share dialog offers.
+    await docs.update(WS, 'd1', { title: 'Plan' } as never, ctx(BOB), filer(BOB));
+    for (const refile of [{ clientId: CLIENT_X }, { projectId: PROJECT_A }, { clientId: null }]) {
+      await assert.rejects(
+        docs.update(WS, 'd1', refile as never, ctx(BOB), filer(BOB)),
+        ForbiddenException,
+        `a WRITE grantee cannot send ${JSON.stringify(refile)}`,
+      );
+    }
+    // The owner files it, but only under a client they can see; a hidden
+    // client answers like a missing one.
+    await docs.update(WS, 'd1', { clientId: CLIENT_X } as never, ctx(ALICE), filer(ALICE));
+    await assert.rejects(
+      docs.update(WS, 'd1', { clientId: CLIENT_Y } as never, ctx(ALICE), filer(ALICE)),
+      NotFoundException,
+    );
+    await assert.rejects(
+      docs.create(WS, ALICE, { title: 'New', clientId: CLIENT_Y } as never, filer(ALICE)),
+      NotFoundException,
+    );
+    // Projects go through projectAccessWhere, so a hidden one is refused too.
+    await assert.rejects(
+      docs.update(WS, 'd1', { projectId: PROJECT_A } as never, ctx(ALICE), filer(ALICE)),
+      NotFoundException,
+    );
+    assert.deepEqual(projectWheres[0]!.where.AND, [
+      projectAccessWhere(filer(ALICE).scope as never),
+    ]);
+    assert.equal(writes.length, 2, 'only the title edit and the visible filing are written');
+  }
+
+  // 18. Signup slugs and signature titles -------------------------------------
+  {
+    // A deleted workspace still holds its slug in the unique index, so the
+    // allocator must see it (raw client) and move on instead of answering
+    // 409 to addresses with no account.
+    const orgs = new OrganizationsService(
+      {
+        raw: {
+          workspace: {
+            findUnique: async (a: { where: { slug: string } }) =>
+              a.where.slug === 'acme' ? { id: 'deleted-workspace' } : null,
+          },
+        },
+        client: { workspace: { findUnique: async () => null } },
+      } as unknown as PrismaService,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    const slug = await (
+      orgs as unknown as { allocateWorkspaceSlug: (base: string) => Promise<string> }
+    ).allocateWorkspaceSlug('acme');
+    assert.match(slug, /^acme-[0-9a-f]{4}$/);
+
+    // The client Signatures tab shows a source document's live title only to
+    // someone who can still read the document.
+    const member = { userId: ME, workspaceRole: 'MEMBER' };
+    assert.equal(mayReadSourceDocument(member, { createdById: OTHER, access: [] }), false);
+    assert.equal(mayReadSourceDocument(member, { createdById: OTHER, access: [{}] }), true);
+    assert.equal(mayReadSourceDocument(member, { createdById: ME, access: [] }), true);
+    assert.equal(
+      mayReadSourceDocument(
+        { userId: ME, workspaceRole: 'ADMIN' },
+        { createdById: OTHER, access: [] },
+      ),
+      true,
+    );
   }
 
   console.log('security-hardening: OK');
