@@ -120,6 +120,22 @@ function assertNotReservedContent(content: string | null | undefined): void {
   }
 }
 
+/**
+ * Lock a room's row for the rest of the transaction, so changes to who its
+ * admins are (a demotion, an admin leaving) run one at a time per room. Without
+ * it two admins demoting each other, or leaving together, both see the other as
+ * the remaining admin and the room ends up with none.
+ *
+ * FOR NO KEY UPDATE, not FOR UPDATE: it does not block the FOR KEY SHARE that
+ * foreign-key checks take when a message or participant row is inserted.
+ */
+async function lockRoomAdmins(
+  tx: { $queryRaw<T = unknown>(query: TemplateStringsArray, ...values: unknown[]): Promise<T> },
+  roomId: string,
+): Promise<void> {
+  await tx.$queryRaw`SELECT id FROM "ChatRoom" WHERE id = ${roomId} FOR NO KEY UPDATE`;
+}
+
 @Injectable()
 export class ChatService {
   private readonly logger = new Logger(ChatService.name);
@@ -2036,23 +2052,27 @@ export class ChatService {
     // A room with no ADMIN row falls back to "every member is an admin"
     // (assertRoomAdmin, for rooms older than roles). Demoting the last admin
     // would trigger that fallback and hand admin rights to everyone, so the
-    // last admin stays one until someone else is promoted.
-    if (role !== 'ADMIN') {
-      const admins = await this.prisma.client.chatRoomParticipant.findMany({
-        where: { roomId, role: 'ADMIN' },
-        select: { userId: true },
-      });
-      if (admins.length === 1 && admins[0]!.userId === targetUserId) {
-        throw new BadRequestException({
-          title: 'A group needs at least one admin',
-          status: 400,
-          detail: 'Make someone else an admin first.',
+    // last admin stays one until someone else is promoted. The count and the
+    // update share one transaction under the room lock.
+    await this.prisma.client.$transaction(async (tx) => {
+      await lockRoomAdmins(tx, roomId);
+      if (role !== 'ADMIN') {
+        const admins = await tx.chatRoomParticipant.findMany({
+          where: { roomId, role: 'ADMIN' },
+          select: { userId: true },
         });
+        if (admins.length === 1 && admins[0]!.userId === targetUserId) {
+          throw new BadRequestException({
+            title: 'A group needs at least one admin',
+            status: 400,
+            detail: 'Make someone else an admin first.',
+          });
+        }
       }
-    }
-    await this.prisma.client.chatRoomParticipant.update({
-      where: { roomId_userId: { roomId, userId: targetUserId } },
-      data: { role },
+      await tx.chatRoomParticipant.update({
+        where: { roomId_userId: { roomId, userId: targetUserId } },
+        data: { role },
+      });
     });
     return { ok: true, role };
   }
@@ -2075,20 +2095,6 @@ export class ChatService {
         status: 400,
       });
     }
-    // If the leaver is the only admin and other members remain, hand the
-    // crown to the oldest member so the room never becomes orphaned. Runs in
-    // a single transaction so the leave + promote happen atomically.
-    const participants = await this.prisma.client.chatRoomParticipant.findMany({
-      where: { roomId },
-      orderBy: { joinedAt: 'asc' },
-      select: { userId: true, role: true, joinedAt: true },
-    });
-    const self = participants.find((p) => p.userId === userId);
-    const others = participants.filter((p) => p.userId !== userId);
-    const otherAdminExists = others.some((p) => p.role === 'ADMIN');
-    const successor =
-      self?.role === 'ADMIN' && !otherAdminExists && others.length > 0 ? others[0] : null;
-
     // Record the "left" system message before the leaver drops out of the
     // room, authored by the leaver so it threads correctly. Best-effort.
     const me = await this.prisma.client.user.findUnique({
@@ -2100,7 +2106,22 @@ export class ChatService {
       user: me?.name?.trim() || me?.email || 'Someone',
     });
 
+    // If the leaver is the only admin and other members remain, hand the
+    // crown to the oldest member so the room never becomes orphaned. The
+    // read, the leave and the promote share one transaction under the room
+    // lock, so two admins leaving at once cannot each count on the other.
     await this.prisma.client.$transaction(async (tx) => {
+      await lockRoomAdmins(tx, roomId);
+      const participants = await tx.chatRoomParticipant.findMany({
+        where: { roomId },
+        orderBy: { joinedAt: 'asc' },
+        select: { userId: true, role: true },
+      });
+      const self = participants.find((p) => p.userId === userId);
+      const others = participants.filter((p) => p.userId !== userId);
+      const otherAdminExists = others.some((p) => p.role === 'ADMIN');
+      const successor =
+        self?.role === 'ADMIN' && !otherAdminExists && others.length > 0 ? others[0] : null;
       await tx.chatRoomParticipant.deleteMany({ where: { roomId, userId } });
       if (successor) {
         await tx.chatRoomParticipant.update({
@@ -2254,15 +2275,17 @@ export class ChatService {
 
   async previewInvite(userId: string, code: string): Promise<InvitePreview> {
     const invite = await this.findActiveInvite(code);
-    const [participants, alreadyJoined] = await Promise.all([
-      this.prisma.client.chatRoomParticipant.count({
-        where: { roomId: invite.roomId },
-      }),
-      this.prisma.client.chatRoomParticipant.findUnique({
-        where: { roomId_userId: { roomId: invite.roomId, userId } },
-        select: { id: true },
-      }),
-    ]);
+    const alreadyJoined = await this.prisma.client.chatRoomParticipant.findUnique({
+      where: { roomId_userId: { roomId: invite.roomId, userId } },
+      select: { id: true },
+    });
+    // The preview shows the room name, its size and the inviter's email, so
+    // it is held to the same rule as accepting: someone who could not join
+    // learns nothing about the room.
+    if (!alreadyJoined) await this.assertMayJoinViaInvite(userId, invite);
+    const participants = await this.prisma.client.chatRoomParticipant.count({
+      where: { roomId: invite.roomId },
+    });
     const now = Date.now();
     const expired = invite.expiresAt ? invite.expiresAt.getTime() < now : false;
     const exhausted = invite.maxUses ? invite.usedCount >= invite.maxUses : false;
@@ -2300,21 +2323,8 @@ export class ChatService {
     if (invite.maxUses && invite.usedCount >= invite.maxUses) {
       throw new BadRequestException({ title: 'Invite reached its usage cap', status: 400 });
     }
-    if (invite.room.workspaceId) {
-      const ws = await orgWorkspaceMembership(this.prisma, userId, invite.room.workspaceId);
-      if (!ws) {
-        throw new ForbiddenException({
-          title: 'You must be a workspace member to accept this invite',
-          status: 403,
-        });
-      }
-    } else {
-      // DMs and groups have no workspace: their organization is their
-      // members'. An invite code must not carry someone from another
-      // organization into a private group; only an accepted chat request
-      // ever opens a conversation across organizations.
-      await this.assertInviteStaysInOrg(userId, invite.roomId, invite.createdById);
-    }
+    // A current member is told so before any join rule runs: the rules decide
+    // who may come in, and a member of a cross-org room is already in.
     const existing = await this.prisma.client.chatRoomParticipant.findUnique({
       where: { roomId_userId: { roomId: invite.roomId, userId } },
       select: { id: true },
@@ -2322,6 +2332,7 @@ export class ChatService {
     if (existing) {
       return { roomId: invite.roomId, alreadyJoined: true, systemMessage: null };
     }
+    await this.assertMayJoinViaInvite(userId, invite);
     // Claim a use atomically. Read-then-increment let N concurrent accepts on
     // a single-use invite all pass the check above and all join a private
     // room. The conditional updateMany only matches while a use is left.
@@ -2347,6 +2358,28 @@ export class ChatService {
       user: await this.displayName(userId),
     });
     return { roomId: invite.roomId, alreadyJoined: false, systemMessage };
+  }
+
+  /** May someone who is not in the room yet join it with this invite? */
+  private async assertMayJoinViaInvite(
+    userId: string,
+    invite: { roomId: string; createdById: string; room: { workspaceId: string | null } },
+  ): Promise<void> {
+    if (invite.room.workspaceId) {
+      const ws = await orgWorkspaceMembership(this.prisma, userId, invite.room.workspaceId);
+      if (!ws) {
+        throw new ForbiddenException({
+          title: 'You must be a workspace member to accept this invite',
+          status: 403,
+        });
+      }
+      return;
+    }
+    // DMs and groups have no workspace: their organization is their
+    // members'. An invite code must not carry someone from another
+    // organization into a private group; only an accepted chat request
+    // ever opens a conversation across organizations.
+    await this.assertInviteStaysInOrg(userId, invite.roomId, invite.createdById);
   }
 
   /** Gathers the inputs of `inviteKeepsOrganization` (cross-org-block.ts). */
@@ -2439,8 +2472,12 @@ export class ChatService {
             user: { select: { id: true, name: true, email: true, image: true } },
           },
         },
+        // Moderation needs to know a conversation exists and who is in it, not
+        // what was said. Only a public channel's last message is loaded (its
+        // workspace can read it); DMs, groups and private channels come back
+        // without one, so their bodies never leave the database.
         messages: {
-          where: { deletedAt: null },
+          where: { deletedAt: null, room: { workspaceId: { not: null }, isPrivate: false } },
           orderBy: { createdAt: 'desc' },
           take: 1,
           include: { attachments: true },
@@ -2474,13 +2511,7 @@ export class ChatService {
             image: p.user.image,
           },
         })),
-        // Moderation needs to know a conversation exists and who is in it, not
-        // what was said. DMs, groups and private channels list without their
-        // last message; a public channel keeps it (its workspace can read it).
-        lastMessage:
-          r.messages[0] && r.workspaceId !== null && !r.isPrivate
-            ? this.mapMessageRow(r.messages[0])
-            : null,
+        lastMessage: r.messages[0] ? this.mapMessageRow(r.messages[0]) : null,
         unreadCount: 0,
       })),
     };

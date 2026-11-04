@@ -462,10 +462,18 @@ export class OrganizationsService {
     });
     // This route is public. Answering "Email already in use" told anyone
     // whether an address has an account; the answer is now the same `ok` the
-    // caller gets after a real signup, and nothing is created.
-    const existing = await this.prisma.client.user.findUnique({
+    // caller gets after a real signup, and nothing is created. A deleted
+    // account still holds its unique email, so it counts too: missing it let
+    // the create fail on the unique index and gave the address away. The
+    // extension accepts `includeDeleted`; Prisma's generated types don't.
+    const existing = await (
+      this.prisma.client.user as unknown as {
+        findUnique(args: unknown): Promise<{ id: string } | null>;
+      }
+    ).findUnique({
       where: { email: input.email.trim().toLowerCase() },
       select: { id: true },
+      includeDeleted: true,
     });
     if (existing) {
       this.logger.log('[ORG_SELF_SIGNUP] skipped: the owner address already has an account');

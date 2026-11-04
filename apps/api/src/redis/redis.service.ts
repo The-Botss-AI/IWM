@@ -39,9 +39,11 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
    * current window. `SET NX EX` and `INCR` run in one MULTI, so the window's
    * TTL is set together with the key; the old separate INCR then EXPIRE could
    * leave a key with no TTL after a crash in between, blocking that caller
-   * for good. While Redis is not connected this refuses with 503 instead of
-   * waiting: the client queues commands with no retry limit, which hung the
-   * request until Redis came back.
+   * for good. A key already left in that state (`TTL` -1) gets its window
+   * here; `SET NX` alone never touches an existing key. `TTL` rather than
+   * `EXPIRE NX` because that flag needs Redis 7. While Redis is not connected
+   * this refuses with 503 instead of waiting: the client queues commands with
+   * no retry limit, which hung the request until Redis came back.
    */
   async hitWindow(key: string, windowSeconds: number): Promise<number> {
     const client = this.client;
@@ -52,10 +54,19 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
         detail: 'Please try again in a moment.',
       });
     }
-    const results = await client.multi().set(key, '0', 'EX', windowSeconds, 'NX').incr(key).exec();
+    const results = await client
+      .multi()
+      .set(key, '0', 'EX', windowSeconds, 'NX')
+      .incr(key)
+      .ttl(key)
+      .exec();
     const counted = results?.[1];
     if (!counted || counted[0]) {
       throw counted?.[0] ?? new Error(`Rate counter ${key} failed`);
+    }
+    const ttl = results?.[2];
+    if (ttl && !ttl[0] && Number(ttl[1]) === -1) {
+      await client.expire(key, windowSeconds);
     }
     return Number(counted[1]);
   }

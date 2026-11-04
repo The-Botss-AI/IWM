@@ -328,21 +328,35 @@ async function main(): Promise<void> {
   // 9. Rate-limit window counter ---------------------------------------------
   {
     const calls: unknown[][] = [];
+    let ttl = 42;
     const chain = {
       set: (...a: unknown[]) => (calls.push(['set', ...a]), chain),
       incr: (...a: unknown[]) => (calls.push(['incr', ...a]), chain),
+      ttl: (...a: unknown[]) => (calls.push(['ttl', ...a]), chain),
       exec: async () => [
         [null, 'OK'],
         [null, 3],
+        [null, ttl],
       ],
     };
+    const client = {
+      status: 'ready',
+      multi: () => chain,
+      expire: async (...a: unknown[]) => (calls.push(['expire', ...a]), 1),
+    };
     const redis = new RedisService({ get: () => undefined } as never);
-    (redis as unknown as { _client: unknown })._client = { status: 'ready', multi: () => chain };
+    (redis as unknown as { _client: unknown })._client = client;
     assert.equal(await redis.hitWindow('rate:k', 60), 3);
     assert.deepEqual(calls, [
       ['set', 'rate:k', '0', 'EX', 60, 'NX'],
       ['incr', 'rate:k'],
+      ['ttl', 'rate:k'],
     ]);
+    // A counter the old INCR-then-EXPIRE left without a TTL gets its window.
+    calls.length = 0;
+    ttl = -1;
+    assert.equal(await redis.hitWindow('rate:k', 60), 3);
+    assert.deepEqual(calls.at(-1), ['expire', 'rate:k', 60]);
     (redis as unknown as { _client: unknown })._client = { status: 'reconnecting' };
     await assert.rejects(redis.hitWindow('rate:k', 60), ServiceUnavailableException);
   }
@@ -416,12 +430,17 @@ async function main(): Promise<void> {
       assert.equal(select[hidden], undefined, `coworker list hides ${hidden}`);
     }
 
-    // Public signup: a known email gets the same answer and creates nothing.
+    // Public signup: a known email gets the same answer and creates nothing,
+    // a deleted account's email included (it still holds the unique index).
+    // The fake only sees the account when the lookup asks for deleted rows.
     const orgs = new OrganizationsService(
       {
         client: {
           organization: { findFirst: async () => null },
-          user: { findUnique: async () => ({ id: OTHER }) },
+          user: {
+            findUnique: async (args: { includeDeleted?: boolean }) =>
+              args.includeDeleted === true ? { id: OTHER } : null,
+          },
         },
       } as unknown as PrismaService,
       {} as never,
@@ -526,6 +545,94 @@ async function main(): Promise<void> {
     await assert.rejects(walk('t1', 't1'), BadRequestException, 'a task under itself');
     await walk('t3', 't1');
     await walk('t2', 't1');
+  }
+
+  // 16. Chat invites and room admins ------------------------------------------
+  {
+    const orgOf: Record<string, string> = { [ME]: 'org-a', [OTHER]: 'org-b' };
+    let member = false;
+    const invitePrisma = {
+      client: {
+        chatRoomInvite: {
+          findFirst: async () => ({
+            id: 'i1',
+            code: 'code',
+            roomId: 'r1',
+            createdById: OTHER,
+            maxUses: null,
+            usedCount: 0,
+            expiresAt: null,
+            room: { id: 'r1', name: 'Secret', type: 'GROUP', workspaceId: null, deletedAt: null },
+            createdBy: { id: OTHER, name: 'Other', email: 'other@b.example', image: null },
+          }),
+        },
+        chatRoomParticipant: {
+          findUnique: async () => (member ? { id: 'p1' } : null),
+          count: async () => 2,
+          findMany: async () => [{ user: { organizationId: 'org-b' } }],
+        },
+      },
+    } as unknown as PrismaService;
+    const invites = new ChatService(invitePrisma, {} as never);
+    (invites as unknown as { getUserOrganizationId: (id: string) => Promise<string> })[
+      'getUserOrganizationId'
+    ] = async (id) => orgOf[id]!;
+    // Someone from another org learns nothing about the room from a preview.
+    await assert.rejects(invites.previewInvite(ME, 'code'), ForbiddenException);
+    await assert.rejects(invites.acceptInvite(ME, 'code'), ForbiddenException);
+    // A current member (here, of a cross-org room) is told so, not refused.
+    member = true;
+    assert.equal((await invites.previewInvite(ME, 'code')).alreadyJoined, true);
+    assert.deepEqual(await invites.acceptInvite(ME, 'code'), {
+      roomId: 'r1',
+      alreadyJoined: true,
+      systemMessage: null,
+    });
+
+    // Admin changes count and write under the room lock, in one transaction.
+    const steps: string[] = [];
+    let admins: { userId: string; role: string }[] = [];
+    const tx = {
+      $queryRaw: async (sql: TemplateStringsArray) => {
+        steps.push(/FOR NO KEY UPDATE/.test(sql.join('?')) ? 'lock' : 'sql');
+        return [];
+      },
+      chatRoomParticipant: {
+        findMany: async () => (steps.push('read'), admins),
+        update: async (a: { where: { roomId_userId: { userId: string } } }) =>
+          steps.push(`promote:${a.where.roomId_userId.userId}`),
+        deleteMany: async () => steps.push('leave'),
+      },
+    };
+    const roomPrisma = {
+      client: {
+        chatRoom: { findFirst: async () => ({ id: 'r1', type: 'GROUP', createdById: null }) },
+        chatRoomParticipant: { findUnique: async () => ({ id: 'p1' }) },
+        user: { findUnique: async () => ({ name: 'Me', email: 'me@a.example' }) },
+        $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+      },
+    } as unknown as PrismaService;
+    const rooms = new ChatService(roomPrisma, {} as never);
+    const stub = rooms as unknown as Record<string, unknown>;
+    stub['assertRoomAdmin'] = async () => undefined;
+    stub['assertRoomMember'] = async () => undefined;
+    stub['recordSystemMessage'] = async () => null;
+
+    admins = [{ userId: OTHER, role: 'ADMIN' }];
+    await assert.rejects(
+      rooms.updateParticipantRole(ME, 'r1', OTHER, 'MEMBER'),
+      BadRequestException,
+      'the last admin stays one',
+    );
+    assert.deepEqual(steps, ['lock', 'read']);
+
+    steps.length = 0;
+    admins = [
+      { userId: ME, role: 'ADMIN' },
+      { userId: OTHER, role: 'MEMBER' },
+    ];
+    await rooms.leaveRoom(ME, 'r1');
+    assert.deepEqual(steps, ['lock', 'read', 'leave', `promote:${OTHER}`]);
   }
 
   console.log('security-hardening: OK');
