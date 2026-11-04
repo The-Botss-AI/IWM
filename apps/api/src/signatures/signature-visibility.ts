@@ -29,3 +29,18 @@ export function signatureVisibleWhere(actor: {
     ],
   };
 }
+
+/**
+ * May this viewer see a request's source document itself (its live title),
+ * not just the request? The in-memory form of `documentReadWhere`: a
+ * workspace owner/admin, the document's creator, or someone with a grant.
+ * The requester always sees their request, but an editor whose access was
+ * removed must not keep learning what the document is called.
+ */
+export function mayReadSourceDocument(
+  actor: { userId: string; workspaceRole: string | null | undefined },
+  doc: { createdById: string; access: readonly unknown[] },
+): boolean {
+  if (actor.workspaceRole === 'OWNER' || actor.workspaceRole === 'ADMIN') return true;
+  return doc.createdById === actor.userId || doc.access.length > 0;
+}
