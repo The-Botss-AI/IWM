@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { toastError } from '@/lib/toast';
 
 import { CustomImage } from './custom-image';
+import { SelectAllKeys } from './extensions/select-all-keys';
 import { baseExtensions } from './extensions-base';
 import { InlineBubbleMenu } from './inline-bubble-menu';
 import { buildSlashItems, SlashCommand, SlashMenuList, type SlashItem } from './slash-menu';
@@ -63,6 +64,7 @@ export function DocumentEditor({ value, onChange, editable = true }: DocumentEdi
     () => [
       ...baseExtensions({ includeImage: false }),
       CustomImage,
+      SelectAllKeys,
       SlashCommand.configure({
         suggestion: {
           char: '/',

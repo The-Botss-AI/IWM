@@ -22,6 +22,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Loader } from '@/components/ui/loader';
 import { CustomImage } from '@/components/editor/custom-image';
+import { SelectAllKeys } from '@/components/editor/extensions/select-all-keys';
 import { useFileUpload } from '@/hooks/use-file-upload';
 import { promptDialog } from '@/lib/prompt';
 import { toastError, toastErrorMessage } from '@/lib/toast';
@@ -71,6 +72,7 @@ export function MailEditor({ initialHtml, onChange, placeholder, resetKey }: Pro
       // shared with the document editor so signature and compose images can be
       // sized just like everywhere else images are inserted between text.
       CustomImage,
+      SelectAllKeys,
       Placeholder.configure({ placeholder: placeholder ?? 'Write your message…' }),
     ],
     content: initialHtml || '',
