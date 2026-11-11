@@ -4,6 +4,3 @@
  * suspend or demote this row.
  */
 export const ROOT_ORG_ID = 'org_root_thebotss';
-
-/** Slug of the root organization; reserved so no tenant can take it. */
-export const ROOT_ORG_SLUG = 'platform';

@@ -5,6 +5,8 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import type {
@@ -16,6 +18,8 @@ import type {
   UpdateMailSignatureInput,
 } from '@botss/shared-types';
 
+import { AddonsService } from '../addons/addons.service';
+import { platformMailHosts } from '../common/platform-env';
 import { CpanelService } from '../cpanel/cpanel.service';
 import { ROOT_ORG_ID } from '../organizations/organizations.constants';
 import { PrismaService } from '../prisma/prisma.service';
@@ -43,6 +47,7 @@ export class MailAccountsService {
     private readonly cpanel: CpanelService,
     private readonly imapSync: ImapSyncService,
     @InjectQueue(MAIL_QUEUE) private readonly queue: Queue<MailJobData>,
+    @Optional() private readonly addons?: AddonsService,
   ) {}
 
   /**
@@ -67,10 +72,11 @@ export class MailAccountsService {
         title: 'Mailbox setup not available',
         status: 403,
         detail:
-          "Mailbox setup is only for The Botss team. Add your mailbox manually with your provider's IMAP/SMTP settings.",
+          "Mailbox setup is only available to the platform organization. Add your mailbox manually with your provider's IMAP/SMTP settings.",
         code: 'cpanel-platform-only',
       });
     }
+    await this.addons?.assertEnabled(user.organizationId, 'cpanel');
     if (!this.cpanel.isEnabled()) {
       throw new ForbiddenException({
         title: 'cPanel not configured',
@@ -86,14 +92,14 @@ export class MailAccountsService {
         detail: `Your email (${user.email}) is not on the cPanel-managed domain. Add the mailbox manually with your provider's IMAP/SMTP credentials.`,
       });
     }
-    const imapHost = process.env.MAIL_DEFAULT_IMAP_HOST?.trim();
-    const smtpHost = process.env.MAIL_DEFAULT_SMTP_HOST?.trim();
-    if (!imapHost || !smtpHost) {
-      throw new ForbiddenException({
-        title: 'Mail hosts not configured',
+    const hosts = platformMailHosts();
+    if (!hosts) {
+      throw new ServiceUnavailableException({
+        title: 'Mailbox setup is not configured',
         status: 503,
         detail:
-          'Self-serve mailbox setup needs MAIL_DEFAULT_IMAP_HOST and MAIL_DEFAULT_SMTP_HOST configured on the server. Ask your admin, or add this mailbox manually.',
+          'Self-serve mailbox setup needs MAIL_DEFAULT_IMAP_HOST and MAIL_DEFAULT_SMTP_HOST on the server. Add this mailbox manually for now.',
+        code: 'mail-defaults-missing',
       });
     }
     // Reset the cPanel mailbox password FIRST. If that fails, abort before
@@ -121,10 +127,10 @@ export class MailAccountsService {
     return this.add(workspaceId, userId, {
       email: user.email,
       displayName: user.name,
-      imapHost,
+      imapHost: hosts.imapHost,
       imapPort: 993,
       imapSecure: true,
-      smtpHost,
+      smtpHost: hosts.smtpHost,
       smtpPort: 465,
       smtpSecure: true,
       username: user.email,

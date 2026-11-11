@@ -45,6 +45,10 @@ const SOFT_DELETE_MODELS = new Set<string>([
   // for the same month is created. PayrollItem cascades from its run.
   'PayrollEmployee',
   'PayrollRun',
+  // Form builder. Deleting a form or a response is reversible; FormVersion,
+  // FormAccess and FormUpload hang off these and are never soft-deleted alone.
+  'Form',
+  'FormSubmission',
 ]);
 
 const isSoftDeleteModel = (model: string | undefined): boolean =>
@@ -134,9 +138,8 @@ async function liveOne(delegate: any, where: any): Promise<number | null> {
  * - For genuine deletion (GDPR, seeds), call `model.hardDelete(...)` or
  *   `model.hardDeleteMany(...)`.
  *
- * Soft-delete models: User, Organization, Workspace, Project, Task, Lead,
- * Client, Document, FileObject, Comment, Contract, Expense, Invoice,
- * SignatureRequest.
+ * Soft-delete models: see SOFT_DELETE_MODELS at the top of this file (the
+ * single list).
  */
 export function withSoftDelete(prisma: PrismaClient) {
   return prisma.$extends({

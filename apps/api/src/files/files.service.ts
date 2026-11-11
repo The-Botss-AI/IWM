@@ -349,6 +349,143 @@ export class FilesService {
     return { ...created, sizeBytes: created.sizeBytes.toString() };
   }
 
+  // ─── Raw object helpers (no FileObject row) ───────────────────────────────
+  // Used by features that keep their own metadata table, e.g. form answers
+  // (FormUpload), so their objects never show in the workspace Files list.
+
+  /** Upper bound for any single upload on this deployment. */
+  get maxUploadBytes(): number {
+    return MAX_UPLOAD_BYTES;
+  }
+
+  /**
+   * Bucket for form answers (uploads from respondents). Set
+   * `S3_FORMS_BUCKET` to a bucket WITHOUT anonymous read so the only way in is
+   * a short-lived signed link; unset, form files share the main bucket (public
+   * read, random key), like every other upload today.
+   */
+  get formsBucket(): string {
+    return process.env.S3_FORMS_BUCKET?.trim() || this.bucket;
+  }
+
+  /** Safe ASCII object-key suffix for a user-supplied file name. */
+  safeObjectName(filename: string): string {
+    return filename.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80) || 'file';
+  }
+
+  /** Same serve-time disposition rule as `presign`: only safe raster images inline. */
+  private dispositionFor(filename: string, mimeType: string): string {
+    const ascii = this.safeObjectName(filename).replace(/[^\x20-\x7e]/g, '_');
+    return isSafeInlineImage(mimeType)
+      ? `inline; filename="${ascii}"`
+      : `attachment; filename="${ascii}"`;
+  }
+
+  /** Points a presigned URL at the public S3 host when one is configured. */
+  private toPublicHost(url: string): string {
+    if (!process.env.S3_PUBLIC_URL) return url;
+    return url.replace(
+      this.endpoint.replace(/\/+$/, ''),
+      process.env.S3_PUBLIC_URL.replace(/\/+$/, ''),
+    );
+  }
+
+  /**
+   * Presigns a request a browser sends. With `S3_PRESIGN_ENDPOINT` the URL is
+   * signed for that host directly (a presigned URL signs its Host header, so
+   * rewriting the host afterwards would break it); otherwise it is signed for
+   * `S3_ENDPOINT` and pointed at the public host.
+   */
+  private async signForBrowser(
+    command: PutObjectCommand | GetObjectCommand,
+    expiresIn: number,
+  ): Promise<string> {
+    if (this.presignS3) return getSignedUrl(this.presignS3, command, { expiresIn });
+    return this.toPublicHost(await getSignedUrl(this.s3, command, { expiresIn }));
+  }
+
+  /** Presigned PUT for a caller-chosen key. The caller owns key scoping. */
+  async presignObjectUpload(args: {
+    bucket: string;
+    objectKey: string;
+    filename: string;
+    mimeType: string;
+    sizeBytes: number;
+    expiresIn?: number;
+  }): Promise<{ uploadUrl: string; headers: Record<string, string>; expiresAt: Date }> {
+    if (args.sizeBytes > MAX_UPLOAD_BYTES) throw tooLarge();
+    const expiresIn = args.expiresIn ?? 600;
+    const disposition = this.dispositionFor(args.filename, args.mimeType);
+    try {
+      const uploadUrl = await this.signForBrowser(
+        new PutObjectCommand({
+          Bucket: args.bucket,
+          Key: args.objectKey,
+          ContentType: args.mimeType,
+          ContentLength: args.sizeBytes,
+          ContentDisposition: disposition,
+        }),
+        expiresIn,
+      );
+      return {
+        uploadUrl,
+        // Echo every signed header (see `presign`).
+        headers: { 'Content-Type': args.mimeType, 'Content-Disposition': disposition },
+        expiresAt: new Date(Date.now() + expiresIn * 1000),
+      };
+    } catch (err) {
+      this.logger.error('Failed to presign object upload', err as Error);
+      throw new InternalServerErrorException({
+        title: 'Upload unavailable',
+        status: 500,
+        detail: "Couldn't prepare the upload. Try again in a moment.",
+      });
+    }
+  }
+
+  /** The stored object's real size and type, or null when it is missing. */
+  async headObject(
+    bucket: string,
+    objectKey: string,
+  ): Promise<{ sizeBytes: number; mimeType: string | null } | null> {
+    try {
+      const head = await this.s3.send(new HeadObjectCommand({ Bucket: bucket, Key: objectKey }));
+      return { sizeBytes: Number(head.ContentLength ?? 0), mimeType: head.ContentType ?? null };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Short-lived signed GET for a private object. */
+  async presignObjectDownload(
+    bucket: string,
+    objectKey: string,
+    filename: string,
+    mimeType: string,
+    expiresIn = 300,
+  ): Promise<{ url: string; expiresAt: Date }> {
+    const url = await this.signForBrowser(
+      new GetObjectCommand({
+        Bucket: bucket,
+        Key: objectKey,
+        ResponseContentDisposition: this.dispositionFor(filename, mimeType),
+      }),
+      expiresIn,
+    );
+    return { url, expiresAt: new Date(Date.now() + expiresIn * 1000) };
+  }
+
+  /** Deletes one object. Resolves false when storage refused (a missing object counts as deleted). */
+  async deleteObject(bucket: string, objectKey: string): Promise<boolean> {
+    try {
+      await this.s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: objectKey }));
+      return true;
+    } catch (err) {
+      this.logger.warn(`Object delete refused: ${(err as Error)?.name ?? 'unknown'}`);
+      return false;
+    }
+  }
+
   /**
    * Store bytes the server produced itself (rendered invoice PDFs) and record
    * the FileObject, using the same key convention and disposition rules as a

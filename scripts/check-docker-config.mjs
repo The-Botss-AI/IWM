@@ -14,6 +14,8 @@
  *   4. Web code outside the browser using NEXT_PUBLIC_API_URL to reach the
  *      API: on the server that has to be API_INTERNAL_URL.
  *   5. A Node version in the Dockerfile below the one package.json requires.
+ *   6. docker/db-setup.mjs no longer applying migrations or writing the `_upgrade`
+ *      migration that brings an existing database up to the current schema.
  *
  * Plain Node, no dependencies. Run: node scripts/check-docker-config.mjs
  */
@@ -148,6 +150,14 @@ const wantedMajor = Number(
 const imageMajor = Number(/^FROM node:(\d+)/m.exec(dockerfile)?.[1] ?? 0);
 if (imageMajor < wantedMajor) {
   problems.push(`Dockerfile uses node:${imageMajor}, package.json needs Node ${wantedMajor}+.`);
+}
+
+// 6. db-setup keeps both the init and the upgrade path.
+const dbSetup = read('docker/db-setup.mjs');
+for (const needle of ['--from-empty', '--from-schema-datasource', 'migrate', 'deploy']) {
+  if (!dbSetup.includes(needle)) {
+    problems.push(`docker/db-setup.mjs no longer contains "${needle}": fresh installs or upgrades would break.`);
+  }
 }
 
 if (problems.length > 0) {

@@ -8,7 +8,7 @@ export const WorkspaceRole = z.enum([
   'MEMBER',
   'VIEWER',
   'CLIENT',
-  // Phase 4 - appended only; never reorder or remove existing values.
+  // Appended only; never reorder or remove existing values.
   'MANAGER',
   'EDITOR',
 ]);
@@ -115,7 +115,7 @@ export const SignatureEventKind = z.enum([
 ]);
 export type SignatureEventKind = z.infer<typeof SignatureEventKind>;
 
-// Phase 3 enums
+// Project management enums
 export const SprintStatus = z.enum(['PLANNED', 'ACTIVE', 'COMPLETED']);
 export type SprintStatus = z.infer<typeof SprintStatus>;
 
@@ -138,7 +138,17 @@ export const TaskFormFieldType = z.enum([
 ]);
 export type TaskFormFieldType = z.infer<typeof TaskFormFieldType>;
 
-// Phase 2 Step F - custom fields
+// Form builder (2026-11). Mirrors the Prisma enums; append-only.
+export const FormStatus = z.enum(['DRAFT', 'PUBLISHED', 'CLOSED']);
+export type FormStatus = z.infer<typeof FormStatus>;
+
+export const FormInternalAccess = z.enum(['NONE', 'WORKSPACE', 'SELECTED']);
+export type FormInternalAccess = z.infer<typeof FormInternalAccess>;
+
+export const FormSubmissionSource = z.enum(['INTERNAL', 'PUBLIC']);
+export type FormSubmissionSource = z.infer<typeof FormSubmissionSource>;
+
+// Custom fields
 export const CustomFieldScope = z.enum(['PROJECT', 'TASK', 'LEAD', 'CLIENT']);
 export type CustomFieldScope = z.infer<typeof CustomFieldScope>;
 

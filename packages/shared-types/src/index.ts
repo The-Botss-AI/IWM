@@ -1,3 +1,4 @@
+import './common/zod-messages.js';
 // Common building blocks
 export * from './common/id.js';
 export * from './common/pagination.js';
@@ -24,9 +25,10 @@ export * from './comment.js';
 export * from './notification.js';
 export * from './mail.js';
 
-// Phase 3 entities (project management)
+// Project management entities
 export * from './sprint.js';
 export * from './task-form.js';
+export * from './form.js';
 export * from './goal.js';
 export * from './saved-view.js';
 export * from './project-summary.js';
@@ -56,6 +58,8 @@ export * from './livekit.js';
 export * from './organization.js';
 export * from './audit-log.js';
 export * from './support-access.js';
+// Add-ons and email-domain claiming.
+export * from './addons.js';
 
 export * from './notification-subscription.js';
 
@@ -63,7 +67,7 @@ export * from './todo.js';
 export * from './timesheet.js';
 export * from './calendar.js';
 
-// HR / Attendance - Phase 4+. Adds System Role HR, daily Attendance
+// HR / Attendance. Adds System Role HR, daily Attendance
 // records (with admin overrides), and Leave requests with approval
 // state. Existing UserSchema / SystemRole consumers keep working -
 // the enum gained an `HR` value but didn't drop any existing one.

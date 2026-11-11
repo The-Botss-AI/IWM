@@ -428,6 +428,22 @@ export const callSummarySchema = z.object({
 export type CallSummary = z.infer<typeof callSummarySchema>;
 
 /**
+ * Whether a call is still ringing for the signed-in user. Used when the app is
+ * opened from a call notification, so a stale tap does not show a dead call.
+ */
+export const incomingCallResponseSchema = z.object({
+  ringing: z.boolean(),
+  call: z
+    .object({
+      callId: cuid,
+      roomId: cuid,
+      callerId: cuid,
+    })
+    .nullable(),
+});
+export type IncomingCallResponse = z.infer<typeof incomingCallResponseSchema>;
+
+/**
  * People the caller is allowed to start a chat with: always the caller's own
  * organization (root-org members included), independent of the selected
  * workspace. `organization` is kept on the wire for compatibility.

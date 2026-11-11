@@ -24,7 +24,7 @@ export const leadSchema = z.object({
   currency: z.string().length(3),
   notes: z.string().nullable(),
   tags: z.array(z.string()),
-  customFields: z.record(z.unknown()).nullable(),
+  customFields: z.record(z.string(), z.unknown()).nullable(),
   followupAt: z.coerce.date().nullable(),
   convertedToClientId: cuid.nullable(),
   convertedAt: z.coerce.date().nullable(),

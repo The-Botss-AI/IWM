@@ -742,6 +742,31 @@ export function renderSignatureDeclinedEmail(args: {
   return { subject, html, text };
 }
 
+export function renderFormSubmissionEmail(args: {
+  formTitle: string;
+  submittedBy: string;
+  url: string;
+}): { subject: string; html: string; text: string } {
+  const subject = stripHeaderUnsafe(`New response to "${args.formTitle}"`);
+  const text = [
+    `${args.submittedBy} answered "${args.formTitle}".`,
+    '',
+    'Open the form to see the answers:',
+    args.url,
+    '',
+    '- The Botss',
+  ].join('\n');
+  const html = `
+    <div style="font-family:system-ui,-apple-system,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#0f172a">
+      ${emailHeader()}
+      <h2 style="margin:24px 0 16px;font-size:18px">New form response</h2>
+      <p style="margin:0 0 24px">${escapeHtml(args.submittedBy)} answered "<strong>${escapeHtml(args.formTitle)}</strong>".</p>
+      <p style="margin:0"><a href="${escapeHtml(args.url)}" style="${BUTTON_STYLE}">See the answers</a></p>
+    </div>
+  `;
+  return { subject, html, text };
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')

@@ -2,11 +2,13 @@ import { type INestApplicationContext, Logger, type LogLevel } from '@nestjs/com
 import { NestFactory } from '@nestjs/core';
 
 import { AppModule } from './app.module';
+import { platformEnvWarnings } from './common/platform-env';
 import {
   parseWorkerHealthPort,
   startWorkerHealthServer,
   type WorkerHealthDeps,
 } from './health/worker-health-server';
+import { initSentry } from './observability/sentry';
 import { PrismaService } from './prisma/prisma.service';
 import { waitForNoLiveAllProcess } from './redis/process-presence.service';
 import { RedisService } from './redis/redis.service';
@@ -19,6 +21,7 @@ import { RedisService } from './redis/redis.service';
  * The only listener is the health server on WORKER_HEALTH_PORT.
  */
 export async function bootstrapWorker(logLevels: LogLevel[]): Promise<void> {
+  initSentry(); // idempotent; no-op without SENTRY_DSN
   const logger = new Logger('WorkerBootstrap');
   const healthPort = parseWorkerHealthPort(process.env.WORKER_HEALTH_PORT);
 
@@ -66,6 +69,7 @@ export async function bootstrapWorker(logLevels: LogLevel[]): Promise<void> {
 
   logger.log(`Worker running. Health at http://127.0.0.1:${healthPort}/health and /health/ready`);
   logger.log(`Log levels enabled: ${logLevels.join(', ')}`);
+  for (const warning of platformEnvWarnings()) logger.warn(warning);
 
   if (typeof process.send === 'function') {
     process.send('ready');

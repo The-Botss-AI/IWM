@@ -16,6 +16,8 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import type { MailAccount, MailAccountStatus, MailSignature } from '@botss/shared-types';
 
+import { AddonOffNotice } from '@/components/addons/addon-off-notice';
+import { useAddons } from '@/hooks/use-addons';
 import { AddMailAccountDialog } from '@/components/mail/add-mail-account-dialog';
 import { MailEditor } from '@/components/mail/mail-editor';
 import { SelfSetupMailboxDialog } from '@/components/mail/self-setup-mailbox-dialog';
@@ -34,6 +36,7 @@ import {
   useUpdateMailAccount,
   useUpdateMailSignature,
 } from '@/hooks/use-mail-accounts';
+import { env } from '@/lib/env';
 import { promptDialog } from '@/lib/prompt';
 import { relativeTime } from '@/lib/time';
 import { toast } from '@/lib/toast';
@@ -43,10 +46,9 @@ import { cn } from '@/lib/utils';
 // on the API side; the web build can't read the API env, so it is set again
 // as NEXT_PUBLIC_CPANEL_DOMAIN at build time.
 const ROOT_ORG_ID = 'org_root_thebotss';
-// Empty when unset: then no one is offered self-serve mailbox setup.
-const CPANEL_DOMAIN = (process.env.NEXT_PUBLIC_CPANEL_DOMAIN ?? '').trim().toLowerCase();
+const CPANEL_DOMAIN = env.cpanelDomain;
 
-export default function MailSettingsPage() {
+function MailSettingsPageContent() {
   const session = useSessionContext();
   const accounts = useMailAccounts();
   const [addOpen, setAddOpen] = useState(false);
@@ -54,10 +56,12 @@ export default function MailSettingsPage() {
 
   const items = accounts.data?.items ?? [];
   const userEmail = (session.data?.user?.email ?? '').toLowerCase();
+  const cpanelOn = useAddons().isOn('cpanel');
   // The cPanel server is the platform's: only root-org users can self-set up.
   const isOnCpanelDomain =
-    !!CPANEL_DOMAIN &&
     session.data?.user?.organizationId === ROOT_ORG_ID &&
+    cpanelOn &&
+    CPANEL_DOMAIN !== '' &&
     userEmail.endsWith(`@${CPANEL_DOMAIN}`);
   const hasOwnMailbox = items.some(
     (a) => a.email.toLowerCase() === userEmail && a.status !== 'DISABLED',
@@ -574,4 +578,11 @@ function MenuItem({
       {children}
     </button>
   );
+}
+
+/** Hidden while the organization has the Mail add-on switched off. */
+export default function MailSettingsPage() {
+  const addons = useAddons();
+  if (!addons.isOn('mail')) return <AddonOffNotice name="Mail" />;
+  return <MailSettingsPageContent />;
 }

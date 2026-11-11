@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { type ReactNode, useEffect, useMemo } from 'react';
 import type { ProjectRole, WorkspaceRole } from '@botss/shared-types';
 
+import { AppShellSkeleton } from '@/components/shell/app-shell-skeleton';
 import { Button } from '@/components/ui/button';
 import { PageLoader } from '@/components/ui/loader';
 import { AbilityProvider, buildAbility } from '@/lib/ability';
@@ -33,7 +34,9 @@ export function SessionGate({ children }: { children: ReactNode }) {
   // retried by the query and, if they persist, shown as "reconnecting" below
   // while the cookie stays untouched.
   useEffect(() => {
-    if (authFailed) router.replace('/sign-in');
+    if (!authFailed) return;
+    const next = `${window.location.pathname}${window.location.search}`;
+    router.replace(`/sign-in?next=${encodeURIComponent(next)}`);
   }, [authFailed, router]);
 
   // Stale workspace cookie: the API silently falls back to the first
@@ -131,7 +134,7 @@ export function SessionGate({ children }: { children: ReactNode }) {
         </div>
       );
     }
-    return <PageLoader fullScreen label="Loading workspace" />;
+    return <AppShellSkeleton />;
   }
 
   return (

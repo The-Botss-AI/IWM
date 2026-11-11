@@ -16,6 +16,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { UserAvatar } from '@/components/ui/avatar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  canRequestNotificationPermission,
+  requestNotificationPermission,
+} from '@/hooks/use-desktop-notifications';
 import { useInAppNotifications } from '@/hooks/use-in-app-notifications';
 import {
   useMarkAllNotificationsRead,
@@ -60,6 +64,9 @@ export function NotificationBell({
 } = {}) {
   const [open, setOpen] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
+  // Desktop alerts need a user gesture to request permission, so the prompt
+  // lives here as a button instead of firing on page load.
+  const [canEnableAlerts, setCanEnableAlerts] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // Server-side rows the user chose to hide locally - see the comment in
   // the action bar handler below.
@@ -201,8 +208,10 @@ export function NotificationBell({
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
-        if (next) void refetch();
-        else {
+        if (next) {
+          void refetch();
+          setCanEnableAlerts(canRequestNotificationPermission());
+        } else {
           setSelectMode(false);
           setSelected(new Set());
         }
@@ -268,6 +277,23 @@ export function NotificationBell({
             ) : null}
           </div>
         </header>
+
+        {canEnableAlerts ? (
+          <div className="border-line bg-bg-subtle text-ink-muted flex items-center justify-between gap-2 border-b px-4 py-2 text-xs">
+            <span>Get desktop alerts for new activity.</span>
+            <button
+              type="button"
+              onClick={() => {
+                void requestNotificationPermission().then(() =>
+                  setCanEnableAlerts(canRequestNotificationPermission()),
+                );
+              }}
+              className="text-ink hover:bg-bg-surface focus-visible:shadow-focus rounded px-2 py-1 text-xs font-medium focus-visible:outline-none"
+            >
+              Enable
+            </button>
+          </div>
+        ) : null}
 
         {selectMode ? (
           <div className="border-line bg-bg-subtle text-ink-muted flex items-center justify-between gap-2 border-b px-4 py-2 text-xs">

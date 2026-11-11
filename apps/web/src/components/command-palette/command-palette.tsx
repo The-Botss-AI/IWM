@@ -3,6 +3,7 @@
 import { Command } from 'cmdk';
 import {
   Briefcase,
+  ClipboardList,
   FileText,
   FolderKanban,
   Hash,
@@ -169,6 +170,12 @@ export function CommandPalette() {
                       shortcut="G O"
                     >
                       Go to Documents
+                    </Item>
+                    <Item
+                      icon={<ClipboardList className="h-4 w-4" />}
+                      onSelect={() => go({ kind: 'nav', title: 'Forms', href: '/form-builder' })}
+                    >
+                      Go to Forms
                     </Item>
                     <Item
                       icon={<Mail className="h-4 w-4" />}

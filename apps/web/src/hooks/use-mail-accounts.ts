@@ -9,6 +9,7 @@ import type {
   UpdateMailSignatureInput,
 } from '@botss/shared-types';
 
+import { useAddons } from '@/hooks/use-addons';
 import { getApi } from '@/lib/api';
 import { toast, toastError } from '@/lib/toast';
 
@@ -23,9 +24,12 @@ type AccountList = { items: MailAccount[] };
  * polling stops and we fall back to the standard staleTime model.
  */
 export function useMailAccounts() {
+  // Not asked while the Mail add-on is switched off (the API refuses it).
+  const mailOn = useAddons().isOn('mail');
   return useQuery({
     queryKey: mailAccountsKey,
     queryFn: () => getApi().mail.listAccounts(),
+    enabled: mailOn,
     staleTime: 15_000,
     refetchOnMount: false,
     refetchOnWindowFocus: false,

@@ -86,6 +86,9 @@ export function DocumentEditor({ value, onChange, editable = true }: DocumentEdi
   );
 
   const editor = useEditor({
+    // tiptap v3 defaults shouldRerenderOnTransaction to false; the toolbar, bubble menu
+    // and footer counts read editor state during render.
+    shouldRerenderOnTransaction: true,
     extensions,
     content: initialContent,
     editable,

@@ -32,6 +32,9 @@ export const notificationType = z.enum([
   'SIGNATURE_COMPLETED',
   'SIGNATURE_DECLINED',
   'CHAT_REQUEST',
+  'LEAVE_REQUESTED',
+  'FORM_SUBMITTED',
+  'FORM_SHARED',
 ]);
 export type NotificationType = z.infer<typeof notificationType>;
 
@@ -57,6 +60,7 @@ export const notificationEntityType = z.enum([
   'contract',
   'signature',
   'chat_request',
+  'form',
 ]);
 export type NotificationEntityType = z.infer<typeof notificationEntityType>;
 

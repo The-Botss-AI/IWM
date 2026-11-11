@@ -33,6 +33,8 @@ export interface RequestSupportScope {
 interface RequestStore {
   auth?: RequestAuthSnapshot;
   support?: RequestSupportScope;
+  /** Per-request memo (see `requestMemo`). */
+  memo?: Map<string, Promise<unknown>>;
 }
 
 const storage = new AsyncLocalStorage<RequestStore>();
@@ -115,4 +117,30 @@ export function requestAuthFor(userId: string): RequestAuthSnapshot | null {
 /** The signed-in staff user's resolved auth for this request, if any. */
 export function currentRequestAuth(): RequestAuthSnapshot | null {
   return storage.getStore()?.auth ?? null;
+}
+
+/**
+ * Run `load` once per request for `key` and share the promise with every later
+ * caller in the same request. Outside a request (crons, queue jobs, sockets)
+ * it simply calls `load`. A rejected load is not kept, so a retry reloads.
+ */
+export function requestMemo<T>(key: string, load: () => Promise<T>): Promise<T> {
+  const store = storage.getStore();
+  if (!store) return load();
+  const memo = (store.memo ??= new Map());
+  const hit = memo.get(key);
+  if (hit) return hit as Promise<T>;
+  const p = load();
+  memo.set(key, p);
+  p.catch(() => {
+    if (memo.get(key) === p) memo.delete(key);
+  });
+  return p;
+}
+
+/** Forget memoized values whose key starts with `prefix` (after a write). */
+export function forgetRequestMemo(prefix: string): void {
+  const memo = storage.getStore()?.memo;
+  if (!memo) return;
+  for (const key of [...memo.keys()]) if (key.startsWith(prefix)) memo.delete(key);
 }

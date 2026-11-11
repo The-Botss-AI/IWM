@@ -142,7 +142,7 @@ export const presignUploadResponseSchema = z.object({
   /** The bucket the API expects the bytes to land in. */
   bucket: z.string(),
   /** Headers the client must echo on PUT. */
-  headers: z.record(z.string()),
+  headers: z.record(z.string(), z.string()),
   /** Expiry of the presigned URL (UTC). */
   expiresAt: z.coerce.date(),
 });

@@ -16,12 +16,17 @@
  * 4. A day-old session slides its expiry forward; sign-out deletes the row.
  * 5. `onSignInFailed` fires once for a wrong password or an unknown email
  *    (the reply is still 401) and not at all for a successful sign-in.
+ * 6. The real generated Prisma client passes Better Auth's own schema check.
+ *    Since 1.7 the adapter runs it before every auth call and refuses them
+ *    all on a mismatch (a missing core column signs everyone out). Static:
+ *    it reads the client's data model and never connects.
  *
  * Run: pnpm --filter @botss/api test.
  */
 import { webcrypto } from 'node:crypto';
 
 import { type AppAuth, createAuth, hashPassword } from '@botss/auth';
+import { rawPrisma } from '@botss/database';
 
 let failures = 0;
 
@@ -298,7 +303,7 @@ async function getSession(auth: AppAuth, cookie: string) {
 
 async function main(): Promise<void> {
   // 1 + 2: cookies minted by Better Auth 1.1.x keep working.
-  for (const prefix of [undefined, 'botss-staging']) {
+  for (const prefix of [undefined, 'iwm-staging']) {
     const label = prefix ?? 'default prefix';
     const name = `${prefix ?? 'better-auth'}.session_token`;
     const { auth, addSession } = await setup(prefix);
@@ -331,7 +336,7 @@ async function main(): Promise<void> {
       `${label}: expired session refused`,
       (await getSession(auth, `${name}=${expired}`)) === null,
     );
-    const otherName = prefix ? 'better-auth.session_token' : 'botss-staging.session_token';
+    const otherName = prefix ? 'better-auth.session_token' : 'iwm-staging.session_token';
     check(
       `${label}: the other deployment's cookie name is ignored`,
       (await getSession(auth, `${otherName}=${legacy}`)) === null,
@@ -453,6 +458,21 @@ async function main(): Promise<void> {
       calls.length === 0,
       JSON.stringify(calls),
     );
+  }
+
+  // 6: the real schema satisfies Better Auth's runtime schema check.
+  {
+    const real: AppAuth = await createAuth(
+      { secret: SECRET, baseURL: API, trustedOrigins: [WEB], cookieDomain: '.example.test' },
+      { prisma: rawPrisma },
+    );
+    const ctx = (await real.$context) as { explicitSchemaCheck?: () => Promise<void> | void };
+    check('Prisma adapter registers a schema check', typeof ctx.explicitSchemaCheck === 'function');
+    try {
+      await ctx.explicitSchemaCheck?.();
+    } catch (err) {
+      check('Prisma schema passes the Better Auth schema check', false, String(err));
+    }
   }
 
   if (failures > 0) {

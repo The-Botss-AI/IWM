@@ -62,7 +62,7 @@ export type AppAuth = any;
 /**
  * Create the Better Auth instance bound to the project's Prisma client.
  *
- * Email + password is the only enabled provider for Phase 1. Other providers
+ * Email + password is the only enabled provider. Other providers
  * (Google, GitHub, magic link) can be added here without touching the data
  * model - they all flow into the existing `Account` table.
  */

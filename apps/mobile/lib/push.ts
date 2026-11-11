@@ -32,6 +32,24 @@ export async function ensureAndroidChannels(): Promise<void> {
     sound: 'default',
     vibrationPattern: [0, 500, 500, 500],
   });
+  // Calls for Do Not Disturb users: shown, but no sound and no vibration.
+  await Notifications.setNotificationChannelAsync('calls-silent', {
+    name: 'Calls (silent)',
+    importance: Notifications.AndroidImportance.DEFAULT,
+    sound: null,
+    vibrationPattern: [0],
+    enableVibrate: false,
+  });
+}
+
+/** Answer and Decline buttons for silent call notifications (server sends
+ *  categoryId 'call'). Answer opens the app on the call; Decline opens
+ *  the app without navigating and declines the call over the web app's socket. */
+export async function ensureNotificationCategories(): Promise<void> {
+  await Notifications.setNotificationCategoryAsync('call', [
+    { identifier: 'answer', buttonTitle: 'Answer', options: { opensAppToForeground: true } },
+    { identifier: 'decline', buttonTitle: 'Decline', options: { opensAppToForeground: true } },
+  ]).catch(() => undefined);
 }
 
 /**

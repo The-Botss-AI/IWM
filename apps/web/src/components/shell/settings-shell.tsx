@@ -7,6 +7,7 @@ import {
   CalendarRange,
   Clock,
   FileText,
+  Globe,
   History,
   Laptop,
   LifeBuoy,
@@ -14,6 +15,7 @@ import {
   Mail,
   MessageSquare,
   Palette,
+  Puzzle,
   ScrollText,
   Settings as SettingsIcon,
   ShieldCheck,
@@ -24,9 +26,10 @@ import {
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useMemo, type ReactNode } from 'react';
-import type { SystemRole } from '@botss/shared-types';
+import type { AddonKey, SystemRole } from '@botss/shared-types';
 
 import { useSessionContext } from '@/components/auth/session-gate';
+import { useAddons } from '@/hooks/use-addons';
 import { usePermissions, type PermissionsView } from '@/hooks/use-permissions';
 import { cn } from '@/lib/utils';
 
@@ -42,6 +45,8 @@ interface NavItem {
   /// settings access. Server still enforces; this is UX hygiene so non-admins
   /// don't see (or dangle on) admin-only sections.
   gate?: Gate;
+  /// Hidden while the organization has this add-on switched off.
+  addon?: AddonKey;
 }
 
 /** Visibility gates, on effective permissions (custom roles + overrides). */
@@ -102,6 +107,7 @@ const ITEMS: NavItem[] = [
     description: 'Mailboxes and email signatures for the Mail tab.',
     icon: Mail,
     group: 'workspace',
+    addon: 'mail',
   },
   {
     href: '/settings/organization-mail',
@@ -145,6 +151,22 @@ const ITEMS: NavItem[] = [
     gate: ORG_SETTINGS,
   },
   {
+    href: '/settings/addons',
+    label: 'Add ons',
+    description: 'Turn optional features on or off and fill in their settings.',
+    icon: Puzzle,
+    group: 'admin',
+    gate: ORG_SETTINGS,
+  },
+  {
+    href: '/settings/domains',
+    label: 'Domains',
+    description: 'Claim the email domains your staff use.',
+    icon: Globe,
+    group: 'admin',
+    gate: ORG_SETTINGS,
+  },
+  {
     href: '/admin/organizations',
     label: 'Organizations',
     description: 'Tenant organizations: create, edit, suspend and delete.',
@@ -183,6 +205,7 @@ const ITEMS: NavItem[] = [
     icon: CalendarCheck,
     group: 'admin',
     gate: ADMIN_OR_HR,
+    addon: 'hr',
   },
   {
     href: '/admin/attendance/summary',
@@ -191,6 +214,7 @@ const ITEMS: NavItem[] = [
     icon: ListChecks,
     group: 'admin',
     gate: ADMIN_OR_HR,
+    addon: 'hr',
   },
   {
     href: '/admin/leaves',
@@ -199,6 +223,7 @@ const ITEMS: NavItem[] = [
     icon: CalendarRange,
     group: 'admin',
     gate: LEAVE_APPROVER,
+    addon: 'hr',
   },
   {
     href: '/admin/audit-log',
@@ -215,7 +240,13 @@ const GROUPS: ReadonlyArray<{ key: Group; label: string }> = [
   { key: 'admin', label: 'Admin' },
 ];
 
-function canSee(item: NavItem, perms: PermissionsView, role: SystemRole | undefined): boolean {
+function canSee(
+  item: NavItem,
+  perms: PermissionsView,
+  role: SystemRole | undefined,
+  addonOn: (key: AddonKey) => boolean,
+): boolean {
+  if (item.addon && !addonOn(item.addon)) return false;
   if (!item.gate) return true;
   return item.gate(perms, role);
 }
@@ -231,6 +262,7 @@ export function SettingsShell({ children }: { children: ReactNode }) {
   const session = useSessionContext();
   const role = session.data?.user?.systemRole;
   const perms = usePermissions();
+  const addons = useAddons();
 
   // Highlight the most specific matching item (so e.g. /admin/attendance/summary
   // lights "Attendance summary", not the shorter "Attendance").
@@ -253,7 +285,9 @@ export function SettingsShell({ children }: { children: ReactNode }) {
         <aside aria-label="Settings sections">
           <nav className="space-y-4" role="list">
             {GROUPS.map((group) => {
-              const items = ITEMS.filter((i) => i.group === group.key && canSee(i, perms, role));
+              const items = ITEMS.filter(
+                (i) => i.group === group.key && canSee(i, perms, role, addons.isOn),
+              );
               if (items.length === 0) return null;
               return (
                 <div key={group.key} className="space-y-1">

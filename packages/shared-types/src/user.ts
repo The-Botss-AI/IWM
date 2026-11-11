@@ -6,12 +6,12 @@ import { paginationQuerySchema } from './common/pagination.js';
 /* eslint-disable @typescript-eslint/no-redeclare */
 
 /**
- * Cross-workspace role mirrored from `prisma.SystemRole`. Append-only;
- * the Postgres enum on production already carries the same set, and
- * reordering would break stored values.
+ * Cross-workspace role mirrored from `prisma.SystemRole`. Append-only:
+ * the Postgres enum carries the same set, and reordering would break
+ * stored values.
  *
- * - `SUPER_ADMIN`: platform operator, restricted to the Botss root org
- *   by a Postgres trigger. Gates organization management and the
+ * - `SUPER_ADMIN`: platform operator, restricted to the root (platform)
+ *   org by the API. Gates organization management and the
  *   platform log only; no access to data inside other organizations.
  * - `ADMIN`: scoped to one org (tenant or root). Tenant admin.
  * - `HR`: scoped to one org's Attendance + Leave.

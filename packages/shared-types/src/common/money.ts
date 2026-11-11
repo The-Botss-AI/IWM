@@ -55,7 +55,7 @@ export const rateInput = z.union([
     .trim()
     .superRefine((v, ctx) => {
       const problem = rateTextProblem(v);
-      if (problem) ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+      if (problem) ctx.addIssue({ code: 'custom', message: problem });
     }),
   z
     .number()

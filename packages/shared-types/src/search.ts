@@ -97,6 +97,6 @@ export const searchResponseSchema = z.object({
   results: z.array(searchResultSchema),
   /** Present in page mode when more results exist. */
   nextCursor: z.string().nullable().optional(),
-  counts: z.record(searchResultKind, z.number().int().nonnegative()).optional(),
+  counts: z.partialRecord(searchResultKind, z.number().int().nonnegative()).optional(),
 });
 export type SearchResponse = z.infer<typeof searchResponseSchema>;

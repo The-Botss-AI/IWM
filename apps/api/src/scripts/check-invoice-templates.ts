@@ -70,7 +70,7 @@ const SAMPLE = {
     balanceDue: '1050.00',
     notes: 'Thank you for your business.\nSecond line.',
     terms: 'Net 14.',
-    footer: 'The Botss',
+    footer: 'Example Co',
   },
   client: {
     name: 'Acme <Corp>',
@@ -85,7 +85,7 @@ const SAMPLE = {
   project: { name: 'Website rebuild' },
   contract: { title: 'Phase 1' },
   company: {
-    name: 'The Botss',
+    name: 'Example Co',
     logo: null,
     address: 'Lahore, Pakistan',
     email: 'billing@example.com',

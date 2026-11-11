@@ -4,13 +4,15 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AccessToken } from 'livekit-server-sdk';
 import type { LivekitTokenRequest, LivekitTokenResponse } from '@botss/shared-types';
 
-import { assertNotBlockedInCrossOrgDm } from '../chat/cross-org-block';
-import { orgWorkspaceMembership } from '../common/tenant-scope';
+import { AddonsService } from '../addons/addons.service';
+import { assertNotBlockedInCrossOrgDm, spansOrganizations } from '../chat/cross-org-block';
+import { orgWorkspaceMembership, userOrgId } from '../common/tenant-scope';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -23,9 +25,15 @@ import { PrismaService } from '../prisma/prisma.service';
  *   - `LIVEKIT_API_KEY`
  *   - `LIVEKIT_API_SECRET`
  *
- * When any of these is missing every method throws BadRequest so the
+ * An organization may set its own LiveKit server in the `livekit` add-on
+ * (url, API key and secret, all three). It is used for rooms inside that
+ * organization; a room spanning two organizations (a DM from a chat request)
+ * always uses the server default so both sides meet on the same server.
+ *
+ * When no credentials resolve, minting throws BadRequest so the
  * misconfiguration surfaces at the first call instead of silently emitting
- * unusable tokens.
+ * unusable tokens. The `livekit` add-on switched off answers 403
+ * `addon-disabled` (AddonGuard on the controller, re-checked here).
  */
 @Injectable()
 export class LivekitService {
@@ -35,20 +43,12 @@ export class LivekitService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    @Optional() private readonly addons?: AddonsService,
   ) {}
 
   async mintToken(userId: string, input: LivekitTokenRequest): Promise<LivekitTokenResponse> {
-    const url = this.config.get<string>('LIVEKIT_URL');
-    const apiKey = this.config.get<string>('LIVEKIT_API_KEY');
-    const apiSecret = this.config.get<string>('LIVEKIT_API_SECRET');
-    if (!url || !apiKey || !apiSecret) {
-      throw new BadRequestException({
-        title: 'LiveKit not configured',
-        status: 400,
-        detail:
-          'LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET must be set on the API for video/voice rooms.',
-      });
-    }
+    const orgId = await userOrgId(this.prisma, userId);
+    await this.addons?.assertEnabled(orgId, 'livekit');
 
     const room = await this.prisma.client.chatRoom.findFirst({
       where: { id: input.roomId, deletedAt: null },
@@ -110,6 +110,16 @@ export class LivekitService {
       throw new NotFoundException({ title: 'User not found', status: 404 });
     }
 
+    const { url, apiKey, apiSecret } = await this.credentialsFor(orgId, room.id);
+    if (!url || !apiKey || !apiSecret) {
+      throw new BadRequestException({
+        title: 'Video calls are not set up',
+        status: 400,
+        detail:
+          'No LiveKit server is configured. An admin can add one in Settings, Add ons, or the server needs LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET.',
+      });
+    }
+
     // LiveKit room name. Keeping the chat-room id 1:1 with the LiveKit
     // identifier means we don't need a side table mapping the two, and
     // any server-side state stays naturally aligned.
@@ -138,5 +148,32 @@ export class LivekitService {
       roomName,
       identity,
     };
+  }
+
+  /**
+   * The organization's own LiveKit server when it set one and the room is
+   * entirely inside that organization; otherwise the server default.
+   */
+  private async credentialsFor(
+    orgId: string | null,
+    roomId: string,
+  ): Promise<{ url?: string; apiKey?: string; apiSecret?: string }> {
+    const fallback = {
+      url: this.config.get<string>('LIVEKIT_URL'),
+      apiKey: this.config.get<string>('LIVEKIT_API_KEY'),
+      apiSecret: this.config.get<string>('LIVEKIT_API_SECRET'),
+    };
+    if (!orgId || !this.addons) return fallback;
+    const own = await this.addons.livekitCredentials(orgId);
+    if (!own) return fallback;
+    const room = await this.prisma.client.chatRoom.findFirst({
+      where: { id: roomId, deletedAt: null },
+      select: {
+        type: true,
+        participants: { select: { user: { select: { organizationId: true } } } },
+      },
+    });
+    if (!room || spansOrganizations(room.type, room.participants)) return fallback;
+    return own;
   }
 }

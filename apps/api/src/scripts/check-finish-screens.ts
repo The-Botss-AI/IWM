@@ -1,6 +1,6 @@
 /**
- * Server gaps closed for task A4 (finish the half-built screens), no database
- * and no Redis: each service runs against a small in-memory fake.
+ * Server rules behind several finished screens, numbered G5 to G12 below. No
+ * database and no Redis: each service runs against a small in-memory fake.
  *
  *  - G5 milestone reorder takes exactly the contract's full milestone set
  *    (a subset, a duplicate or a stranger is a 400 and writes nothing);

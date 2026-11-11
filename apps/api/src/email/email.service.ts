@@ -254,6 +254,24 @@ export class EmailService {
     );
   }
 
+  /** New response on a form the recipient owns (best effort, never throws). */
+  async sendFormSubmission(
+    organizationId: string,
+    args: {
+      to: string;
+      formTitle: string;
+      submittedBy: string;
+      url: string;
+    },
+  ): Promise<void> {
+    if (await this.isStub(organizationId)) return;
+    await this.enqueueSafe(
+      'form-submission',
+      { kind: 'form-submission', ...args, organizationId },
+      'form-submission',
+    );
+  }
+
   /**
    * Client portal mail (invite, access notice, password reset). Returns false
    * when no transport is configured, so staff know to share the link by hand.

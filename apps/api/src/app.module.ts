@@ -3,6 +3,8 @@ import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 
+import { AddonGuard } from './addons/addon.guard';
+import { AddonsModule } from './addons/addons.module';
 import { AdminModule } from './admin/admin.module';
 import { HrModule } from './hr/hr.module';
 import { AuthModule } from './auth/auth.module';
@@ -33,6 +35,7 @@ import { LivekitModule } from './livekit/livekit.module';
 import { MailModule } from './mail/mail.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PortalModule } from './portal/portal.module';
+import { DomainsModule } from './organizations/domains.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { AuditLogModule } from './audit-log/audit-log.module';
 import { SecurityAlertsModule } from './security-alerts/security-alerts.module';
@@ -43,6 +46,7 @@ import { SearchModule } from './search/search.module';
 import { SprintsModule } from './sprints/sprints.module';
 import { SupportModule } from './support/support.module';
 import { TaskFormsModule } from './task-forms/task-forms.module';
+import { FormsModule } from './forms/forms.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProjectMembersModule } from './project-members/project-members.module';
 import { ProjectsModule } from './projects/projects.module';
@@ -78,6 +82,8 @@ export const APP_SCHEDULE_OPTIONS = scheduleOptionsForRole(getProcessRole());
     // MailModule must register before EmailModule so EmailProcessor can inject
     // MailAccountsService (used for transactional MailAccount lookups).
     MailModule,
+    // Optional per-organization features; global, after MailModule (crypto).
+    AddonsModule,
     AuthModule,
     EmailModule,
     // Before UsersModule so `users/me/sessions` is never read as `users/:id/...`.
@@ -90,6 +96,7 @@ export const APP_SCHEDULE_OPTIONS = scheduleOptionsForRole(getProcessRole());
     PayrollModule,
     SprintsModule,
     TaskFormsModule,
+    FormsModule,
     GoalsModule,
     SavedViewsModule,
     SearchModule,
@@ -109,6 +116,7 @@ export const APP_SCHEDULE_OPTIONS = scheduleOptionsForRole(getProcessRole());
     FilesModule,
     AdminModule,
     OrganizationsModule,
+    DomainsModule,
     AuditLogModule,
     SecurityAlertsModule,
     SupportModule,
@@ -122,6 +130,8 @@ export const APP_SCHEDULE_OPTIONS = scheduleOptionsForRole(getProcessRole());
   providers: [
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
+    // After the two above: needs the resolved user and organization.
+    { provide: APP_GUARD, useClass: AddonGuard },
     { provide: APP_FILTER, useClass: ProblemDetailsExceptionFilter },
   ],
 })

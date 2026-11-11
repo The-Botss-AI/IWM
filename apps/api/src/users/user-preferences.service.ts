@@ -29,6 +29,8 @@ export function mergeUserPreferences(
   const navigation = { ...base.navigation, ...patch.navigation };
   if (navigation.hidden) navigation.hidden = [...navigation.hidden];
   if (Object.keys(navigation).length > 0) out.navigation = navigation;
+  const notifications = { ...base.notifications, ...patch.notifications };
+  if (Object.keys(notifications).length > 0) out.notifications = notifications;
   return out;
 }
 

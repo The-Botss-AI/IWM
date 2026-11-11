@@ -23,10 +23,18 @@ import {
   getAppAppearance,
   replaceAppAppearance,
 } from '@/lib/app-prefs';
+import {
+  claimChatNotificationsFor,
+  DND_USER_CHANGE_EVT,
+  getChatNotifications,
+  getChatNotificationsOwner,
+  replaceDoNotDisturb,
+} from '@/lib/chat-prefs';
 import { sessionQueryOptions } from '@/lib/session-query';
 import { toastError } from '@/lib/toast';
 import {
   appearanceChangeToPatch,
+  dndChangeToPatch,
   hiddenChangeToPatch,
   isEmptyPatch,
   localGapsForServer,
@@ -47,6 +55,25 @@ function isMigrated(userId: string): boolean {
     return window.localStorage.getItem(migratedKey(userId)) === '1';
   } catch {
     return true; // No storage: nothing local worth migrating either.
+  }
+}
+
+/** Per device + user: has this device's local Do Not Disturb been offered to the server? */
+const dndMigratedKey = (userId: string) => `botss.prefs.dnd-migrated.${userId}`;
+
+function isDndMigrated(userId: string): boolean {
+  try {
+    return window.localStorage.getItem(dndMigratedKey(userId)) === '1';
+  } catch {
+    return true; // No storage: nothing to upload safely.
+  }
+}
+
+function markDndMigrated(userId: string): void {
+  try {
+    window.localStorage.setItem(dndMigratedKey(userId), '1');
+  } catch {
+    // Non-fatal; the upload is idempotent.
   }
 }
 
@@ -120,10 +147,15 @@ export function useUserPreferencesSync(): void {
   const inFlight = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const failures = useRef(0);
+  const dndUploaded = useRef(false);
 
   // Bind the device cache to this user before anything is reconciled.
   useEffect(() => {
-    if (userId) claimAppearanceFor(userId);
+    dndUploaded.current = false;
+    if (userId) {
+      claimAppearanceFor(userId);
+      claimChatNotificationsFor(userId);
+    }
   }, [userId]);
 
   // Collect user-initiated edits and save them.
@@ -183,6 +215,10 @@ export function useUserPreferencesSync(): void {
       const detail = (e as CustomEvent<NavUserChangeDetail>).detail;
       if (detail && detail.userId === userId) enqueue(hiddenChangeToPatch(detail.hidden));
     };
+    const onDnd = (e: Event) => {
+      const value = (e as CustomEvent<boolean>).detail;
+      if (typeof value === 'boolean') enqueue(dndChangeToPatch(value));
+    };
     // Don't sit on an unsaved edit when the app is backgrounded or closed
     // (desktop tray, mobile app switch).
     const onHide = () => {
@@ -191,10 +227,12 @@ export function useUserPreferencesSync(): void {
 
     window.addEventListener(APPEARANCE_USER_CHANGE_EVT, onAppearance);
     window.addEventListener(NAV_USER_CHANGE_EVT, onNav);
+    window.addEventListener(DND_USER_CHANGE_EVT, onDnd);
     document.addEventListener('visibilitychange', onHide);
     return () => {
       window.removeEventListener(APPEARANCE_USER_CHANGE_EVT, onAppearance);
       window.removeEventListener(NAV_USER_CHANGE_EVT, onNav);
+      window.removeEventListener(DND_USER_CHANGE_EVT, onDnd);
       document.removeEventListener('visibilitychange', onHide);
       // Best effort on unmount / user switch; harmless 401 after sign-out.
       flush();
@@ -247,5 +285,37 @@ export function useUserPreferencesSync(): void {
     const local = serverToLocal(data.preferences);
     replaceAppAppearance(local.appearance);
     replaceNavHidden(userId, local.hidden);
+    // The server copy is authoritative once it has a value for it.
+    const dnd = data.preferences.notifications?.doNotDisturb;
+    if (dnd !== undefined) {
+      replaceDoNotDisturb(dnd);
+    } else if (
+      getChatNotifications().doNotDisturb &&
+      !dndUploaded.current &&
+      getChatNotificationsOwner() === userId &&
+      !isDndMigrated(userId)
+    ) {
+      // Do Not Disturb set on this device before it was stored server-side:
+      // upload it once so phone pushes honour it too.
+      dndUploaded.current = true;
+      inFlight.current += 1;
+      getApi()
+        .users.updatePreferences(dndChangeToPatch(true))
+        .then((res) => {
+          inFlight.current -= 1;
+          markDndMigrated(userId);
+          qc.setQueryData(userPreferencesKey(userId), res);
+        })
+        .catch((err: unknown) => {
+          inFlight.current -= 1;
+          if (isPermanent(err)) {
+            // Rejected for good: keep it local and stop retrying.
+            markDndMigrated(userId);
+            reportPermanentFailure(err);
+            return;
+          }
+          dndUploaded.current = false;
+        });
+    }
   }, [userId, data, qc]);
 }

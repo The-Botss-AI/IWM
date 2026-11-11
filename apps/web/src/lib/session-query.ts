@@ -4,7 +4,10 @@ import { queryOptions } from '@tanstack/react-query';
 import type { SessionContext } from '@botss/shared-types';
 
 import { getApi } from './api';
+import { safeNextPath } from './safe-next-path';
 import { handleSupportSessionError } from './support-session';
+
+export { safeNextPath };
 
 export const sessionQueryKey = ['session'] as const;
 
@@ -57,14 +60,19 @@ export const sessionQueryOptions = queryOptions({
 
 /**
  * Where to land right after signing in: client-portal accounts go to
- * `/portal`, everyone else to `/home`. If the lookup fails the app shell
- * still sorts it out (SessionGate sends a client account to `/portal`).
+ * `/portal`, everyone else to a safe `?next=` path or `/home`. If the lookup
+ * fails the app shell still sorts it out (SessionGate sends a client account
+ * to `/portal`).
  */
-export async function landingPathAfterSignIn(): Promise<string> {
+export async function landingPathAfterSignIn(next: string | null = null): Promise<string> {
+  const target = safeNextPath(next);
   try {
     const session = await getApi().users.session();
-    return session.user.accountType === 'CLIENT' ? '/portal' : '/home';
+    if (session.user.accountType === 'CLIENT') {
+      return target?.startsWith('/portal') ? target : '/portal';
+    }
+    return target ?? '/home';
   } catch {
-    return '/home';
+    return target ?? '/home';
   }
 }

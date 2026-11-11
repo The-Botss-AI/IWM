@@ -2,6 +2,7 @@ import {
   ForbiddenException,
   Injectable,
   Logger,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import type { AppAuth } from '@botss/auth';
@@ -9,6 +10,7 @@ import { rawPrisma } from '@botss/database';
 import type { AccountType, SystemRole } from '@botss/shared-types';
 import type { Request } from 'express';
 
+import { OrganizationAutoRouteService } from '../organizations/auto-route.service';
 import { AuthContextCache } from './auth-context-cache';
 import { type AuthContext, buildAuthContext, loadAuthContextRows } from './auth-context';
 
@@ -24,7 +26,12 @@ export function setAuthInstance(auth: AppAuth): void {
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
-  constructor(private readonly contextCache: AuthContextCache) {}
+  constructor(
+    private readonly contextCache: AuthContextCache,
+    // Optional so tests that build AuthService by hand still work; without it
+    // an org-less account is refused exactly as before.
+    @Optional() private readonly autoRoute?: OrganizationAutoRouteService,
+  ) {}
 
   get auth(): AppAuth {
     if (!authInstance) {
@@ -215,7 +222,12 @@ export class AuthService {
       where: { id: userId },
       select: { organizationId: true },
     });
-    if (!u?.organizationId) {
+    // An org-less staff account on a domain an organization verified through
+    // DNS joins that organization (never by the legacy emailDomain column).
+    const routedOrgId = u?.organizationId
+      ? u.organizationId
+      : ((await this.autoRoute?.attachOnBootstrap(userId, userEmail)) ?? null);
+    if (!routedOrgId) {
       this.logger.warn(`ensureBootstrapWorkspace refused: user ${userId} has no organization`);
       throw new ForbiddenException({
         title: 'No organization',
@@ -229,7 +241,7 @@ export class AuthService {
         name: `${userName || userEmail}'s Workspace`,
         slug,
         ownerId: userId,
-        organizationId: u.organizationId,
+        organizationId: routedOrgId,
       },
     });
     await rawPrisma.workspaceMembership.create({

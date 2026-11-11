@@ -25,7 +25,7 @@ import { useAppAppearance } from '@/lib/app-prefs';
  * the whole shell - remounting every page component underneath.
  *
  * That does not happen here, because this sits inside `SessionGate`, which
- * renders a spinner until the session query resolves over the network.
+ * renders a skeleton until the session query resolves over the network.
  * Children therefore first render well after mount, by which point the
  * appearance hook has already read localStorage. `ThemePreScript` separately
  * stamps `data-nav-layout` on `<html>` before hydration so the background and

@@ -21,7 +21,7 @@ export default function AppError({
   reset: () => void;
 }) {
   useEffect(() => {
-    reportClientError(error, { boundary: 'app', digest: error.digest });
+    void reportClientError(error, { boundary: 'app', digest: error.digest });
   }, [error]);
 
   return (

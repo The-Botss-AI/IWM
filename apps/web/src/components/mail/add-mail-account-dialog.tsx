@@ -18,14 +18,15 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PasswordInput } from '@/components/ui/password-input';
 import { useAddMailAccount } from '@/hooks/use-mail-accounts';
+import { env } from '@/lib/env';
 import { toast, toastErrorMessage } from '@/lib/toast';
 
-// Pre-filled hosts, from NEXT_PUBLIC_MAIL_DEFAULT_IMAP_HOST /
-// NEXT_PUBLIC_MAIL_DEFAULT_SMTP_HOST at build time. Empty when unset.
+// Prefilled host: the platform mail server when the build sets
+// NEXT_PUBLIC_MAIL_DEFAULT_HOST, otherwise empty.
 const DEFAULTS = {
-  imapHost: (process.env.NEXT_PUBLIC_MAIL_DEFAULT_IMAP_HOST ?? '').trim(),
+  imapHost: env.mailDefaultHost,
   imapPort: 993,
-  smtpHost: (process.env.NEXT_PUBLIC_MAIL_DEFAULT_SMTP_HOST ?? '').trim(),
+  smtpHost: env.mailDefaultHost,
   smtpPort: 465,
 } as const;
 
@@ -132,7 +133,7 @@ export function AddMailAccountDialog({ open, onOpenChange }: Props) {
             <Input
               id="mail-display"
               autoComplete="name"
-              placeholder="The Botss"
+              placeholder="Your name"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
             />

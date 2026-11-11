@@ -23,6 +23,7 @@ import {
   editChatMessageBodySchema,
   type ForwardChatMessagesBody,
   forwardChatMessagesBodySchema,
+  type IncomingCallResponse,
   type ListRoomMessagesQuery,
   listRoomMessagesQuerySchema,
   type RenameRoomInput,
@@ -65,13 +66,23 @@ export class ChatController {
 
   /**
    * People the caller can start a new chat with. Independent of the current
-   * workspace - root-org (Botss) users see everyone, tenant users see their
+   * workspace - root-org (platform) users see everyone, tenant users see their
    * own organization. Mounts at GET /chat/contacts.
    */
   @Get('contacts')
   @SkipPermissions()
   listContacts(@CurrentUser() user: AuthedUser) {
     return this.chat.listContactsForUser(user.id);
+  }
+
+  /** Is this call still ringing for me? Used when opened from a call notification. */
+  @Get('calls/:callId/incoming')
+  @SkipPermissions()
+  getIncomingCall(
+    @CurrentUser() user: AuthedUser,
+    @Param('callId', new ZodValidationPipe(cuid)) callId: string,
+  ): IncomingCallResponse {
+    return this.chat.getIncomingCall(callId, user.id);
   }
 
   @Get('rooms/:roomId/messages')
@@ -236,6 +247,8 @@ export class ChatController {
     // after any live call in the room had already been killed, so a
     // non-member could hang up anyone's call by posting a room id.
     await this.chat.assertRoomMember(user.id, roomId);
+    // Calls switched off (livekit add-on): refuse before ending anything.
+    await this.chat.assertCallsEnabled(user.id, roomId);
     await this.chat.forceEndCallByRoom(roomId);
     const { call, receiverUserIds } = await this.chat.initiateCall(
       user.id,

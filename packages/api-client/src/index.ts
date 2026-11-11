@@ -29,7 +29,9 @@ import { SearchResource } from './resources/search.js';
 import { SignaturesResource } from './resources/signatures.js';
 import { SprintsResource } from './resources/sprints.js';
 import { SupportResource } from './resources/support.js';
+import { AddonsResource, OrgDomainsResource } from './resources/addons.js';
 import { TaskFormsResource } from './resources/task-forms.js';
+import { FormsResource, PublicFormsResource } from './resources/forms.js';
 import { TasksResource } from './resources/tasks.js';
 import { AttendanceResource } from './resources/attendance.js';
 import { HolidaysResource } from './resources/holidays.js';
@@ -64,9 +66,12 @@ export interface BotssApiClient {
   finance: FinanceResource;
   payroll: PayrollResource;
   invoices: InvoicesResource;
-  // Phase 3 (project management)
+  // Project management
   sprints: SprintsResource;
   taskForms: TaskFormsResource;
+  /** Workspace form builder. */
+  forms: FormsResource;
+  publicForms: PublicFormsResource;
   goals: GoalsResource;
   savedViews: SavedViewsResource;
   search: SearchResource;
@@ -81,9 +86,13 @@ export interface BotssApiClient {
   auditLog: AuditLogResource;
   /** Support access grants and platform operator support sessions. */
   support: SupportResource;
+  /** Optional per-organization features and their settings. */
+  addons: AddonsResource;
+  /** Email domains the organization claims (DNS TXT verification). */
+  orgDomains: OrgDomainsResource;
   /** Client portal - CLIENT (portal) accounts only. */
   portal: PortalResource;
-  // HR (Phase 4+) - gated by SystemRole on the server.
+  // HR - gated by SystemRole on the server.
   leaves: LeavesResource;
   attendance: AttendanceResource;
   holidays: HolidaysResource;
@@ -114,6 +123,8 @@ export function createClient(opts: ClientOptions): BotssApiClient {
     invoices: new InvoicesResource(http),
     sprints: new SprintsResource(http),
     taskForms: new TaskFormsResource(http),
+    forms: new FormsResource(http),
+    publicForms: new PublicFormsResource(http),
     goals: new GoalsResource(http),
     savedViews: new SavedViewsResource(http),
     search: new SearchResource(http),
@@ -127,6 +138,8 @@ export function createClient(opts: ClientOptions): BotssApiClient {
     organizations: new OrganizationsResource(http),
     auditLog: new AuditLogResource(http),
     support: new SupportResource(http),
+    addons: new AddonsResource(http),
+    orgDomains: new OrgDomainsResource(http),
     portal: new PortalResource(http),
     leaves: new LeavesResource(http),
     attendance: new AttendanceResource(http),

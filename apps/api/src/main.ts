@@ -57,6 +57,12 @@ if (appDir !== rootDir) {
   if (existsSync(appEnvLocal)) loadDotenv({ path: appEnvLocal, override: true });
 }
 
+// Sentry must initialise before express/Nest load so it can instrument them.
+// No-op unless SENTRY_DSN is set.
+import { initSentry } from './observability/sentry';
+
+initSentry();
+
 import { Logger, type LogLevel } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ExpressAdapter, type NestExpressApplication } from '@nestjs/platform-express';
@@ -73,6 +79,7 @@ import { setAuthInstance } from './auth/auth.service';
 import { PreflightError, runPreflight } from './common/preflight';
 import { reportSignInFailure } from './security-alerts/sign-in-failure-sink';
 import { isAllowedBetterAuthRoute } from './auth/better-auth-routes';
+import { platformEnvWarnings } from './common/platform-env';
 import { getSharedMailSender } from './email/email.module';
 import { bootstrapWorker } from './worker-bootstrap';
 
@@ -181,6 +188,8 @@ async function bootstrap(): Promise<void> {
     await bootstrapWorker(resolveLogLevels());
     return;
   }
+
+  for (const warning of platformEnvWarnings()) logger.warn(warning);
 
   const expressApp = express();
   // The API sits behind exactly one reverse proxy (Caddy). Without this,
@@ -355,6 +364,19 @@ async function bootstrap(): Promise<void> {
   });
   expressApp.use(`/${apiPrefix}/forms/public`, publicContentLimiter);
   expressApp.use(`/${apiPrefix}/public/documents`, publicContentLimiter);
+  // Form builder public links (lookup, upload tickets, submits) get their own
+  // bucket: a form with several file questions makes a request per file, and
+  // must not eat into the document and signing limits above. The form service
+  // adds per-form Redis caps on top.
+  const publicFormsLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 60,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { title: 'Too many requests. Try again later.', status: 429 },
+    skip: (req) => req.method === 'OPTIONS',
+  });
+  expressApp.use(`/${apiPrefix}/public/forms`, publicFormsLimiter);
   // Signing links: session lookups, PDF fetches, sign and decline.
   expressApp.use(`/${apiPrefix}/public/signatures`, publicContentLimiter);
 
@@ -416,9 +438,13 @@ async function bootstrap(): Promise<void> {
   // (the signing schema caps it at 420,000 characters). Registered before
   // init, so Nest skips its default JSON parser; the rawBody option still
   // applies, which the lead intake's HMAC check relies on.
+  // Anonymous form endpoints get a tighter JSON limit, parsed first so the
+  // 1 MB parser below skips them. A form answer never needs more: long text
+  // is capped at 10,000 characters and rich text at 50 KB of JSON.
+  expressApp.use(`/${apiPrefix}/public/forms`, express.json({ limit: '256kb' }));
   app.useBodyParser('json', { limit: '1mb' });
 
-  // Socket.IO adapter for the chat gateway (Phase 3). Must be registered
+  // Socket.IO adapter for the chat gateway. Must be registered
   // before listen() so gateway lifecycle hooks bind to the underlying HTTP
   // server. The global /api/v1 prefix above does NOT apply to socket.io
   // namespaces - clients connect to ws://host:4000/chat.

@@ -111,6 +111,16 @@ export type EmailJobData =
       inviterName: string | null;
       url: string;
       expiresAtLabel: string | null;
+    })
+  | (OrgRoutingHint & {
+      /** A new response on a form the recipient owns. Title, who and a link
+       *  only: never answers, because tenants without their own mail server
+       *  send through the platform mailbox, whose Sent folder keeps a copy. */
+      kind: 'form-submission';
+      to: string;
+      formTitle: string;
+      submittedBy: string;
+      url: string;
     });
 
 export const EMAIL_JOB_OPTIONS = {

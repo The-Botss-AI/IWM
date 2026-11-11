@@ -24,7 +24,7 @@ enum WorkspaceRole {
   MEMBER
   VIEWER
   CLIENT
-  /// Phase 4 - finer-grained roles for the org-layer refactor. Appended
+  /// Finer-grained roles added with the organization layer. Appended
   /// only; do not reorder or remove existing values.
   MANAGER
   EDITOR
@@ -197,6 +197,12 @@ enum NotificationType {
   // Cross-org chat requests (2026-10): a request reached you, or one you
   // sent was accepted.
   CHAT_REQUEST
+  // HR alert (2026-10): a new leave request is waiting for approval.
+  LEAVE_REQUESTED
+  // Forms (2026-11): a response arrived on a form you own, or someone
+  // shared a form with you to fill in.
+  FORM_SUBMITTED
+  FORM_SHARED
 }
 
 enum MailAccountStatus {
@@ -241,7 +247,7 @@ enum FileKind {
 }
 
 // ============================================================================
-// Sprints (Phase 3 - project management)
+// Sprints (project management)
 // ============================================================================
 
 enum SprintStatus {
@@ -251,7 +257,7 @@ enum SprintStatus {
 }
 
 // ============================================================================
-// Custom fields (Phase 2 Step F) - typed per-workspace / per-project definitions
+// Custom fields - typed per-workspace / per-project definitions
 // ============================================================================
 
 enum CustomFieldScope {
@@ -273,7 +279,7 @@ enum CustomFieldType {
 }
 
 // ============================================================================
-// Invoices (Phase 4 Step J)
+// Invoices
 // ============================================================================
 
 enum InvoiceStatus {
@@ -485,13 +491,21 @@ model User {
   mailAccounts MailAccount[]
   mailOutbox   MailOutbox[]
 
-  // Sprint / form / goal / saved-view relations (Phase 3 project management)
+  // Sprint / form / goal / saved-view relations (project management)
   sprintTasksAdded SprintTask[]
   createdTaskForms TaskForm[]   @relation("TaskFormCreator")
   defaultForForms  TaskForm[]   @relation("TaskFormDefaultAssignee")
+
+  // Forms (form builder)
+  createdForms          Form[]           @relation("FormCreator")
+  publishedFormVersions FormVersion[]    @relation("FormVersionPublisher")
+  formAccess            FormAccess[]     @relation("FormAccessUser")
+  grantedFormAccess     FormAccess[]     @relation("FormAccessGranter")
+  formSubmissions       FormSubmission[] @relation("FormSubmissionSubmitter")
+  formUploads           FormUpload[]     @relation("FormUploadUploader")
   ownedGoals       Goal[]
 
-  // Invoicing (Phase 4 Step J)
+  // Invoicing
   createdInvoices       Invoice[]         @relation("InvoiceCreator")
   recordedPayments      Payment[]         @relation("PaymentRecorder")
   voidedPayments        Payment[]         @relation("PaymentVoider")
@@ -536,6 +550,8 @@ model User {
   /// Support access grants this user created / revoked as an org admin.
   supportGrantsGranted SupportGrant[] @relation("SupportGrantGrantedBy")
   supportGrantsRevoked SupportGrant[] @relation("SupportGrantRevokedBy")
+  /// Add-on settings this user last changed as an org admin.
+  addonsUpdated        OrganizationAddon[] @relation("OrganizationAddonUpdatedBy")
 
   /// Tenant organization the user belongs to. Nullable for back-compat
   /// (and for CLIENT accounts).
@@ -642,16 +658,21 @@ model Session {
 }
 
 model Account {
-  id           String   @id @default(cuid())
-  userId       String
-  providerId   String
-  accountId    String
-  password     String?
-  accessToken  String?
-  refreshToken String?
-  idToken      String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                    String    @id @default(cuid())
+  userId                String
+  providerId            String
+  accountId             String
+  password              String?
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  /// Never written by email+password, but Better Auth 1.7's runtime schema
+  /// check refuses every auth call when these core columns are missing.
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -677,7 +698,7 @@ model VerificationToken {
 }
 
 // ============================================================================
-// Organizations (Phase 4 - multi-tenant layer)
+// Organizations (multi-tenant layer)
 // ============================================================================
 
 /// Tenant organization. Workspaces and Users hang off this. Exactly one
@@ -696,7 +717,7 @@ model Organization {
   /// Exactly one row has this true: the platform organization. The API
   /// keeps this row immutable.
   isRoot          Boolean   @default(false)
-  /// Admin-toggleable suspend switch. Root cannot be suspended (trigger).
+  /// Admin-toggleable suspend switch. Root cannot be suspended (the API refuses).
   isActive        Boolean   @default(true)
   /// Tenant-scoped feature toggles. Validated by orgFeatureFlagsSchema in
   /// @botss/shared-types.
@@ -721,6 +742,8 @@ model Organization {
   paymentSources PaymentSource[]         @relation("OrganizationPaymentSources")
   roles          Role[]                  @relation("OrganizationRoles")
   supportGrants  SupportGrant[]          @relation("OrganizationSupportGrants")
+  addons         OrganizationAddon[]     @relation("OrganizationAddons")
+  domains        OrganizationDomain[]    @relation("OrganizationDomains")
 
   // `slug` is @unique; no separate index.
   @@index([isRoot])
@@ -791,6 +814,57 @@ model SupportGrant {
   @@index([revokedAt, expiresAt])
   @@index([grantedById])
   @@index([revokedById])
+}
+
+/// One add-on's switch and settings for one organization. A missing row means
+/// "the default": every add-on except `ai` is ON by default, so organizations
+/// that existed before add-ons keep everything working with no row at all.
+/// Rows are written only when an org admin changes an add-on. The registry of
+/// add-ons and their settings schemas lives in apps/api/src/addons.
+model OrganizationAddon {
+  id                 String   @id @default(cuid())
+  organizationId     String
+  /// Registry key: mail, cpanel, polar, twilio, livekit, hr, ai.
+  key                String
+  enabled            Boolean
+  /// AES-256-GCM (MAIL_ENCRYPTION_KEY) of the settings JSON, base64. Holds
+  /// only values that are stored nowhere else. Never returned in plain text.
+  settingsCiphertext String?
+  /// Null once that admin's account is deleted.
+  updatedById        String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization Organization @relation("OrganizationAddons", fields: [organizationId], references: [id], onDelete: Cascade)
+  updatedBy    User?        @relation("OrganizationAddonUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, key])
+  @@index([key])
+  @@index([updatedById])
+}
+
+/// An email domain an organization claims, proven by a DNS TXT record
+/// `iwm-verification=<verificationToken>` on the domain. Staff on a verified
+/// domain may join only that organization, and no other organization can put
+/// people on it. Any organization can add a domain (so nobody can squat one by
+/// adding it first), but only one can verify it: `verifiedDomain` is set to
+/// `domain` on verify and is unique. Not soft-deleted: removing a domain
+/// deletes the row and frees the domain.
+model OrganizationDomain {
+  id                String    @id @default(cuid())
+  organizationId    String
+  /// Lowercased, no trailing dot.
+  domain            String
+  verificationToken String
+  verifiedAt        DateTime?
+  /// Equals `domain` once verified, null before. Unique: one verified owner.
+  verifiedDomain    String?   @unique
+  createdAt         DateTime  @default(now())
+
+  organization Organization @relation("OrganizationDomains", fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, domain])
+  @@index([domain])
 }
 
 /// Optional org-level fallback for outbound/inbound mail. Precedence at
@@ -865,6 +939,9 @@ model Workspace {
   expenses            Expense[]                @relation("ExpenseWorkspace")
   payrollEmployees    PayrollEmployee[]        @relation("PayrollEmployeeWorkspace")
   payrollRuns         PayrollRun[]             @relation("PayrollRunWorkspace")
+  forms               Form[]
+  formSubmissions     FormSubmission[]
+  formUploads         FormUpload[]
 
   @@index([ownerId])
   // `slug` is @unique; no separate index.
@@ -1067,7 +1144,7 @@ model CommentAttachment {
 }
 
 // ============================================================================
-// Notifications (in-app only - Phase 3 will add transport channels)
+// Notifications
 // ============================================================================
 
 model Notification {
@@ -1335,7 +1412,7 @@ model DocumentAccess {
 }
 
 // ============================================================================
-// Document templates + revisions + collab state (Phase 3 Step I)
+// Document templates + revisions + collab state
 // ============================================================================
 
 model DocumentTemplate {
@@ -1374,7 +1451,7 @@ model DocumentRevision {
   @@index([documentId, createdAt])
 }
 
-/// Yjs CRDT state for the Hocuspocus server (Phase 3 Step I). The Hocuspocus
+/// Yjs CRDT state for the Hocuspocus server (live co-editing). The Hocuspocus
 /// server reads/writes this row on connect/disconnect; the editor falls back
 /// to the existing autosave when Hocuspocus is unreachable.
 model DocumentCollab {
@@ -1429,7 +1506,7 @@ model FileObject {
 }
 
 // ============================================================================
-// Sprints (Phase 3) - backlog planning
+// Sprints - backlog planning
 // ============================================================================
 
 model Sprint {
@@ -1470,7 +1547,7 @@ model SprintTask {
 }
 
 // ============================================================================
-// Custom fields (Phase 2 Step F) - typed per-workspace / per-project schema
+// Custom fields - typed per-workspace / per-project schema
 // ============================================================================
 
 model CustomFieldDefinition {
@@ -1517,7 +1594,7 @@ model CustomFieldValue {
 }
 
 // ============================================================================
-// Task forms (Phase 3) - non-member intake forms
+// Task forms - non-member intake forms
 // ============================================================================
 
 model TaskForm {
@@ -1567,7 +1644,174 @@ model TaskFormSubmission {
 }
 
 // ============================================================================
-// Goals / OKRs (Phase 3)
+// Forms - workspace form builder (2026-11)
+//
+// Separate from TaskForm above (project intake that creates tasks). A Form is
+// edited as a draft and published as immutable FormVersion snapshots; every
+// submission points at the version it was filled against, so old responses
+// keep their original labels after the form changes.
+// ============================================================================
+
+/// Append-only.
+enum FormStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+}
+
+/// Who inside the workspace may fill the form in the app. Append-only.
+enum FormInternalAccess {
+  NONE
+  WORKSPACE
+  SELECTED
+}
+
+/// Append-only.
+enum FormSubmissionSource {
+  INTERNAL
+  PUBLIC
+}
+
+/// Append-only.
+enum FormUploadStatus {
+  PENDING
+  ATTACHED
+}
+
+model Form {
+  id               String             @id @default(cuid())
+  workspaceId      String
+  createdById      String
+  title            String
+  description      String?
+  status           FormStatus         @default(DRAFT)
+  /// Builder working copy. Validated by formDefinitionSchema in @botss/shared-types.
+  draft            Json               @default("{\"fields\":[]}")
+  /// Number of the latest published FormVersion; 0 = never published.
+  publishedVersion Int                @default(0)
+  internalAccess   FormInternalAccess @default(NONE)
+  publicEnabled    Boolean            @default(false)
+  /// Random public link token. Rotating it revokes the old link.
+  publicToken      String?            @unique
+  closesAt         DateTime?
+  responseLimit    Int?
+  /// Validated by formSettingsSchema in @botss/shared-types.
+  settings         Json               @default("{}")
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  deletedAt        DateTime?
+
+  workspace   Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy   User             @relation("FormCreator", fields: [createdById], references: [id])
+  versions    FormVersion[]
+  access      FormAccess[]
+  submissions FormSubmission[]
+  uploads     FormUpload[]
+  // `publicToken` is @unique; no separate index.
+
+  @@index([workspaceId])
+  @@index([createdById])
+  @@index([deletedAt])
+}
+
+model FormVersion {
+  id            String   @id @default(cuid())
+  formId        String
+  version       Int
+  /// Immutable snapshot. Validated by formDefinitionSchema in @botss/shared-types.
+  definition    Json
+  publishedById String
+  publishedAt   DateTime @default(now())
+
+  form        Form             @relation(fields: [formId], references: [id], onDelete: Cascade)
+  publishedBy User             @relation("FormVersionPublisher", fields: [publishedById], references: [id])
+  submissions FormSubmission[]
+
+  @@unique([formId, version])
+  @@index([publishedById])
+}
+
+/// Members picked to fill a form when internalAccess = SELECTED.
+model FormAccess {
+  id          String   @id @default(cuid())
+  formId      String
+  userId      String
+  grantedById String
+  createdAt   DateTime @default(now())
+
+  form      Form @relation(fields: [formId], references: [id], onDelete: Cascade)
+  user      User @relation("FormAccessUser", fields: [userId], references: [id], onDelete: Cascade)
+  grantedBy User @relation("FormAccessGranter", fields: [grantedById], references: [id])
+
+  @@unique([formId, userId])
+  @@index([userId])
+  @@index([grantedById])
+}
+
+model FormSubmission {
+  id            String               @id @default(cuid())
+  workspaceId   String
+  formId        String
+  versionId     String
+  /// Null for public (anonymous) submissions.
+  submittedById String?
+  source        FormSubmissionSource
+  /// { [fieldId]: value } as accepted by the server-side validator.
+  /// Validated by formAnswersSchema in @botss/shared-types.
+  answers       Json
+  ip            String?
+  userAgent     String?
+  createdAt     DateTime             @default(now())
+  deletedAt     DateTime?
+
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  form        Form         @relation(fields: [formId], references: [id], onDelete: Cascade)
+  version     FormVersion  @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  submittedBy User?        @relation("FormSubmissionSubmitter", fields: [submittedById], references: [id], onDelete: SetNull)
+  uploads     FormUpload[]
+
+  @@index([formId, createdAt])
+  @@index([workspaceId])
+  @@index([versionId])
+  @@index([submittedById])
+  @@index([deletedAt])
+}
+
+/// A file answer (upload, image, signature, recording). Created PENDING when
+/// the browser asks for an upload URL, ATTACHED when a submission claims it;
+/// PENDING rows older than a day are swept with their objects. Kept out of
+/// FileObject so anonymous uploads never show in the workspace Files list.
+model FormUpload {
+  id           String           @id @default(cuid())
+  workspaceId  String
+  formId       String
+  fieldId      String
+  submissionId String?
+  /// Null for public uploads; set for in-app fills so only the uploader can
+  /// attach the file to their own submission.
+  uploadedById String?
+  objectKey    String           @unique
+  fileName     String
+  mimeType     String
+  /// Declared size at presign; replaced by the stored object's real size on attach.
+  sizeBytes    BigInt
+  status       FormUploadStatus @default(PENDING)
+  createdAt    DateTime         @default(now())
+
+  workspace  Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  form       Form            @relation(fields: [formId], references: [id], onDelete: Cascade)
+  submission FormSubmission? @relation(fields: [submissionId], references: [id], onDelete: SetNull)
+  uploadedBy User?           @relation("FormUploadUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([formId])
+  @@index([workspaceId])
+  @@index([submissionId])
+  @@index([uploadedById])
+  @@index([status, createdAt])
+}
+
+// ============================================================================
+// Goals / OKRs
 // ============================================================================
 
 model Goal {
@@ -1633,7 +1877,7 @@ model GoalUpdate {
 }
 
 // ============================================================================
-// Saved views (Phase 3) - project shortcuts
+// Saved views - project shortcuts
 // ============================================================================
 
 model SavedView {
@@ -1661,7 +1905,7 @@ model SavedView {
 }
 
 // ============================================================================
-// Mail (Phase 1) - per-user IMAP/SMTP accounts
+// Mail - per-user IMAP/SMTP accounts
 // ============================================================================
 
 model MailAccount {
@@ -2156,7 +2400,7 @@ enum ChatRequestStatus {
   CANCELLED
 }
 
-/// Cross-org chat request (A5). recipientEmail is never resolved on the send
+/// Cross-org chat request. recipientEmail is never resolved on the send
 /// path (enumeration safety). Not soft-deleted: status is the lifecycle.
 model ChatRequest {
   id             String            @id @default(cuid())
@@ -2403,7 +2647,7 @@ model Leave {
 }
 
 // ============================================================================
-// Invoices (Phase 4 Step J)
+// Invoices
 // ============================================================================
 
 model Invoice {

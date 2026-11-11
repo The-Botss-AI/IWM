@@ -1,8 +1,10 @@
 'use client';
 
+import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { getApi } from '@/lib/api';
+import { clearCallNotification, readDeclineCallId } from '@/lib/call-notifications';
 import { getChatSocket } from '@/lib/chat-socket';
 import { toast, toastError, toastErrorMessage } from '@/lib/toast';
 
@@ -45,6 +47,8 @@ export function useWhatsAppCall(selfUserId: string) {
   const [activeCallPeerUserId, setActiveCallPeerUserId] = useState<string | null>(null);
 
   const sessionRef = useRef<ActiveSession | null>(null);
+  const incomingRef = useRef<IncomingCall | null>(null);
+  incomingRef.current = incoming;
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
@@ -258,6 +262,7 @@ export function useWhatsAppCall(selfUserId: string) {
     setActiveCallPeerUserId(incoming.callerId);
     setPhase('connecting');
     setIncoming(null);
+    clearCallNotification(incoming.callId, incoming.roomId);
     try {
       buildPeer(incoming.callerId);
       await attachLocalTracks(false);
@@ -272,11 +277,96 @@ export function useWhatsAppCall(selfUserId: string) {
   const declineIncoming = useCallback(() => {
     if (!incoming) return;
     getChatSocket().emit('call_reject', { callId: incoming.callId });
+    clearCallNotification(incoming.callId, incoming.roomId);
     setIncoming(null);
     // Always tear down so the ringtone halts and `callPhase` returns to
     // 'idle' even if the server's `call_rejected` echo is delayed or lost.
     teardown();
   }, [incoming, teardown]);
+
+  /**
+   * Decline a call by id: the Decline button on a call notification (phone or
+   * browser) or a `decline=1` link. Works with no incoming modal on screen,
+   * e.g. when the app was closed and has only just opened.
+   */
+  const declineById = useCallback(
+    (callId: string) => {
+      try {
+        getChatSocket().emit('call_reject', { callId });
+      } catch {
+        /* socket down - the ring timeout on the server ends the call */
+      }
+      if (incoming?.callId === callId) {
+        clearCallNotification(callId, incoming.roomId);
+        setIncoming(null);
+        teardown();
+      } else {
+        clearCallNotification(callId, null);
+      }
+    },
+    [incoming, teardown],
+  );
+
+  // Decline from a notification: the phone shell dispatches a window event,
+  // the service worker posts a message.
+  useEffect(() => {
+    if (!selfUserId) return;
+    // The phone shell also queues declines on window, for ones sent before
+    // this listener existed (cold start). Take each id once.
+    const drainQueued = () => {
+      const w = window as unknown as { __BOTSS_CALL_DECLINES__?: unknown[] };
+      const queued = w.__BOTSS_CALL_DECLINES__;
+      w.__BOTSS_CALL_DECLINES__ = [];
+      for (const id of queued ?? []) {
+        if (typeof id === 'string' && id) declineById(id);
+      }
+    };
+    const onWindowEvent = () => drainQueued();
+    const onWorkerMessage = (e: MessageEvent) => {
+      if ((e.data as { type?: unknown } | null)?.type !== 'botss:call-decline') return;
+      const id = readDeclineCallId(e.data);
+      if (id) declineById(id);
+    };
+    window.addEventListener('botss:call-decline', onWindowEvent);
+    drainQueued();
+    navigator.serviceWorker?.addEventListener('message', onWorkerMessage);
+    return () => {
+      window.removeEventListener('botss:call-decline', onWindowEvent);
+      navigator.serviceWorker?.removeEventListener('message', onWorkerMessage);
+    };
+  }, [declineById, selfUserId]);
+
+  // Opened from a call notification (`?call=<id>`, plus `decline=1` for
+  // Decline): decline it, or show the incoming-call modal if it is still
+  // ringing. A call that already ended is ignored. The params are stripped so
+  // a reload does not repeat this. Re-checked when the route changes, since
+  // the phone shell opens calls with a client-side navigation.
+  const pathname = usePathname();
+  useEffect(() => {
+    if (!selfUserId) return;
+    const url = new URL(window.location.href);
+    const callId = url.searchParams.get('call');
+    if (!callId) return;
+    const decline = url.searchParams.get('decline') === '1';
+    url.searchParams.delete('call');
+    url.searchParams.delete('decline');
+    window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
+    if (decline) {
+      declineById(callId);
+      return;
+    }
+    if (sessionRef.current) return;
+    void getApi()
+      .chat.getIncomingCall(callId)
+      .then((res) => {
+        if (!res.ringing || !res.call || sessionRef.current) return;
+        setIncoming(res.call);
+        setPhase('incoming');
+      })
+      .catch(() => {
+        /* not ours, gone, or offline - nothing to show */
+      });
+  }, [declineById, pathname, selfUserId]);
 
   const endCall = useCallback(() => {
     const session = sessionRef.current;
@@ -372,13 +462,25 @@ export function useWhatsAppCall(selfUserId: string) {
       }
     };
 
-    const onRejected = () => {
+    const onRejected = (payload?: { callId?: string; roomId?: string }) => {
+      if (payload?.callId) clearCallNotification(payload.callId, payload.roomId ?? null);
       toastErrorMessage('Call declined', { description: 'The other person declined the call.' });
       teardown();
     };
 
-    const onEnded = () => {
+    const onEnded = (payload?: { callId?: string; roomId?: string }) => {
+      if (payload?.callId) clearCallNotification(payload.callId, payload.roomId ?? null);
       teardown();
+    };
+
+    // Answered or declined on another of this user's devices: stop ringing
+    // here and clear the notification.
+    const onHandled = (payload: { callId: string; roomId: string }) => {
+      clearCallNotification(payload.callId, payload.roomId);
+      if (incomingRef.current?.callId === payload.callId) {
+        setIncoming(null);
+        teardown();
+      }
     };
 
     const onOffer = async (payload: {
@@ -476,6 +578,7 @@ export function useWhatsAppCall(selfUserId: string) {
     socket.on('call_accepted', onAccepted);
     socket.on('call_rejected', onRejected);
     socket.on('call_ended', onEnded);
+    socket.on('call_handled', onHandled);
     socket.on('webrtc_offer', onOffer);
     socket.on('webrtc_answer', onAnswer);
     socket.on('webrtc_ice_candidate', onIce);
@@ -486,6 +589,7 @@ export function useWhatsAppCall(selfUserId: string) {
       socket.off('call_accepted', onAccepted);
       socket.off('call_rejected', onRejected);
       socket.off('call_ended', onEnded);
+      socket.off('call_handled', onHandled);
       socket.off('webrtc_offer', onOffer);
       socket.off('webrtc_answer', onAnswer);
       socket.off('webrtc_ice_candidate', onIce);

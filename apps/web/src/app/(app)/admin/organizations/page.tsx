@@ -597,7 +597,8 @@ function CreateOrgDialog({
       toastErrorMessage('Name and slug are required');
       return;
     }
-    if (cleanedSlug === 'platform' || cleanedSlug === ROOT_ORG_ID) {
+    // The server also refuses the root organization's own slug.
+    if (cleanedSlug === ROOT_ORG_ID) {
       toastErrorMessage('That slug is reserved');
       return;
     }

@@ -3,6 +3,7 @@ import { BadRequestException, ConflictException, Injectable, Logger } from '@nes
 import {
   type DesktopPushPayload,
   isAllowedPushEndpoint,
+  parseStoredUserPreferences,
   type RegisterPushDeviceInput,
   type SubscribePushInput,
 } from '@botss/shared-types';
@@ -182,14 +183,29 @@ export class NotificationsPushService {
     } catch (err) {
       this.logger.warn(`live push fan-out failed ${who}: ${(err as Error)?.message ?? 'unknown'}`);
     }
+    // Do Not Disturb silences every push leg (phones and browsers) except
+    // calls, which still arrive as a silent "Call from <name>" notification.
+    // The live socket leg above stays unfiltered: the client applies DND to
+    // its own banners and sounds.
+    const silenced = await this.doNotDisturbUserIds(ids);
+    const isCall = payload.type === 'call';
+    const loud = ids.filter((id) => !silenced.has(id));
+    const quiet = isCall ? ids.filter((id) => silenced.has(id)) : [];
+    const targets = [...loud, ...quiet];
+    const silentPayload = isCall ? this.silentCallPayload(payload) : payload;
     // Native mobile push is independent of Web Push/VAPID and reaches a fully
     // closed app, so always attempt it - even when VAPID isn't configured.
     // Fire-and-forget: a native failure must not affect the web-push result.
-    void this.sendNativePush(ids, payload).catch((err) => {
-      this.logger.warn(
-        `native push fan-out failed ${who}: ${(err as Error)?.message ?? 'unknown'}`,
-      );
-    });
+    for (const [group, groupPayload] of [
+      [loud, payload],
+      [quiet, silentPayload],
+    ] as const) {
+      void this.sendNativePush(group, groupPayload).catch((err) => {
+        this.logger.warn(
+          `native push fan-out failed ${who}: ${(err as Error)?.message ?? 'unknown'}`,
+        );
+      });
+    }
 
     if (!this.enabled) {
       if (!this.warnedDisabledOnce) {
@@ -199,13 +215,16 @@ export class NotificationsPushService {
       return { sent: 0, dropped: 0 };
     }
 
+    if (targets.length === 0) return { sent: 0, dropped: 0 };
     const subs = await this.prisma.client.userNotificationSubscription.findMany({
-      where: ids.length === 1 ? { userId: ids[0] } : { userId: { in: ids } },
+      where: { userId: { in: targets } },
       select: { id: true, userId: true, endpoint: true, auth: true, p256dh: true },
     });
     if (subs.length === 0) return { sent: 0, dropped: 0 };
 
-    const body = JSON.stringify(payload);
+    const quietSet = new Set(quiet);
+    const loudBody = JSON.stringify(payload);
+    const quietBody = JSON.stringify(silentPayload);
     let sent = 0;
     let dropped = 0;
 
@@ -227,7 +246,7 @@ export class NotificationsPushService {
               endpoint: sub.endpoint,
               keys: { auth: sub.auth, p256dh: sub.p256dh },
             },
-            body,
+            quietSet.has(sub.userId) ? quietBody : loudBody,
             { TTL: payload.type === 'call' ? 30 : 120 },
           );
           sent += 1;
@@ -293,6 +312,42 @@ export class NotificationsPushService {
     return { ok: true };
   }
 
+  /** The call push a Do Not Disturb user gets: same target, no sound. */
+  private silentCallPayload(payload: DesktopPushPayload): DesktopPushPayload {
+    const name = payload.data?.callerName;
+    const title =
+      typeof name === 'string' && name.trim().length > 0
+        ? `Call from ${name.trim()}`.slice(0, 120)
+        : payload.title.replace(/^Incoming call from /, 'Call from ');
+    return { ...payload, title, body: 'Answer or decline.', silent: true };
+  }
+
+  /**
+   * Users who turned on Do Not Disturb (server copy of their preferences).
+   * Fails open: if the lookup errors, nobody is treated as silenced so a push
+   * is never lost to a preferences problem.
+   */
+  private async doNotDisturbUserIds(userIds: readonly string[]): Promise<Set<string>> {
+    try {
+      const rows = await this.prisma.client.userPreferences.findMany({
+        where: { userId: { in: [...userIds] } },
+        select: { userId: true, data: true },
+      });
+      const out = new Set<string>();
+      for (const row of rows) {
+        if (parseStoredUserPreferences(row.data).notifications?.doNotDisturb === true) {
+          out.add(row.userId);
+        }
+      }
+      return out;
+    } catch (err) {
+      this.logger.warn(
+        `DND lookup failed, sending anyway: ${(err as Error)?.message ?? 'unknown'}`,
+      );
+      return new Set();
+    }
+  }
+
   /**
    * Fan out a notification to the users' native devices via the Expo push API
    * (Expo routes to FCM/APNs). Delivered even when the app is fully closed.
@@ -304,23 +359,37 @@ export class NotificationsPushService {
     payload: DesktopPushPayload,
   ): Promise<void> {
     const who = userIds.length === 1 ? `userId=${userIds[0]}` : `users=${userIds.length}`;
+    // `userIds` are already filtered for Do Not Disturb by the caller (calls
+    // for DND users arrive here as the silent variant).
+    const targets = [...userIds];
+    if (targets.length === 0) return;
     const devices = await this.prisma.client.userPushDevice.findMany({
-      where: userIds.length === 1 ? { userId: userIds[0] } : { userId: { in: [...userIds] } },
+      where: targets.length === 1 ? { userId: targets[0] } : { userId: { in: targets } },
       select: { id: true, token: true },
     });
     const valid = devices.filter((d) => Expo.isExpoPushToken(d.token));
     if (valid.length === 0) return;
 
+    const silent = payload.silent === true;
     const messages: ExpoPushMessage[] = valid.map((d) => ({
       to: d.token,
       title: payload.title,
       body: payload.body,
-      sound: 'default',
+      // Silent calls (Do Not Disturb): no sound, the no-sound Android channel,
+      // normal iOS interruption (not time sensitive). Answer and Decline come
+      // from the `call` category registered by the mobile shell.
+      sound: silent ? null : 'default',
       // Calls ring with high priority on a dedicated channel; everything else
       // uses the default channel. Channels are created by the mobile shell.
       priority: payload.type === 'call' ? 'high' : 'default',
-      channelId: payload.type === 'call' ? 'calls' : 'default',
-      data: { url: payload.url, ...(payload.data ?? {}) },
+      channelId: silent ? 'calls-silent' : payload.type === 'call' ? 'calls' : 'default',
+      ...(silent ? { categoryId: 'call', interruptionLevel: 'active' as const } : {}),
+      // A call push is worthless once the ring is over: drop it after 30s
+      // instead of letting the push service deliver it late.
+      ...(payload.type === 'call'
+        ? { ttl: 30, expiration: Math.floor(Date.now() / 1000) + 30 }
+        : {}),
+      data: { url: payload.url, ...(payload.data ?? {}), ...(silent ? { silent: true } : {}) },
     }));
 
     const chunks = this.expo.chunkPushNotifications(messages);

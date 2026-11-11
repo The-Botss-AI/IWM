@@ -190,8 +190,8 @@ export function defineSupportAbility(): AppAbility {
  * Layer 3 - Each ProjectMembership.abilities JSON column may carry per-user
  *           CASL rule overrides; we parse them through Zod and apply them last.
  *
- * NOTE: Phase 1 deliberately uses `manage 'all'` for workspace OWNER/ADMIN -
- * tightening to per-workspace conditions lands in Phase 2 along with granular RBAC.
+ * NOTE: workspace OWNER/ADMIN deliberately get `manage 'all'`; per-workspace
+ * conditions on top of that are a possible later tightening.
  */
 export function defineAbilityFor(ctx: AbilityContext): AppAbility {
   const builder = new AbilityBuilder<AppAbility>(AppAbilityClass);
@@ -245,7 +245,9 @@ export function defineAbilityFor(ctx: AbilityContext): AppAbility {
     if (wsp('workspace.view_all')) {
       ec('read', 'all');
     } else if (wsp('workspace.view')) {
-      ec('read', ['Workspace', 'Project', 'Task', 'Document', 'Lead', 'Client']);
+      // `Form` read lets a viewer fill a form shared with them; the service
+      // decides which forms that is.
+      ec('read', ['Workspace', 'Project', 'Task', 'Document', 'Lead', 'Client', 'Form']);
     }
     if (wsp('workspace.settings')) ec('update', 'Workspace');
     if (wsp('members.manage')) {
@@ -266,6 +268,11 @@ export function defineAbilityFor(ctx: AbilityContext): AppAbility {
       ec('delete', 'Document', { createdById: ctx.userId });
     }
     if (wsp('documents.manage_all')) ec('manage', 'Document');
+    // Forms ride on the documents permission (no separate catalog key: a new
+    // workspace key would demote custom roles that hold every key today, see
+    // isFullWorkspaceAdmin). FormsService allows edits only on forms the
+    // caller created unless they are a workspace / org admin.
+    if (wsp('documents.create')) ec(['create', 'update', 'delete'], 'Form');
     if (wsp('files.upload')) {
       ec('create', 'FileObject');
       ec('delete', 'FileObject', { uploadedById: ctx.userId });

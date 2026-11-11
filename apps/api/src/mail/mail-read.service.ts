@@ -472,7 +472,7 @@ export class MailReadService {
   // worst-case latency for a newly-arrived message is ~120 s and the average
   // is ~60 s.
   //
-  // Bumped from 15 s → 60 s after HosterPK flagged our login rate as the
+  // Bumped from 15 s → 60 s after a mail host flagged the login rate as the
   // trigger for cPHulk/CSF auto-bans of the server IP. The IMAP IDLE watcher
   // is the real-time delivery path; this cooldown is the fallback poll, so
   // a generous interval is fine. The pooled IMAP connection in

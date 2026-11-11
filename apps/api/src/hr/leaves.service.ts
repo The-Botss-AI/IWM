@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@botss/database';
@@ -33,6 +34,8 @@ const LEAVE_INCLUDE = {
 
 @Injectable()
 export class LeavesService {
+  private readonly logger = new Logger(LeavesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
@@ -157,7 +160,59 @@ export class LeavesService {
       },
       include: LEAVE_INCLUDE,
     });
+    // Only a person filing their own request waits on HR; HR filing on
+    // someone's behalf is pre-approved and needs no alert.
+    if (created.status === 'PENDING' && targetUserId === actingUserId && role.orgId) {
+      void this.notifyApprovers(created, role.orgId).catch((err: unknown) => {
+        this.logger.warn(
+          `leave alert failed leaveId=${created.id}: ${(err as Error)?.message ?? 'unknown'}`,
+        );
+      });
+    }
     return this.mapRow(created);
+  }
+
+  /**
+   * Tell the people who can approve leave in the requester's organization
+   * (bell row, phone push and desktop banner through NotificationsService)
+   * that a request is waiting. Never the requester, never another org.
+   * Best effort: the request is already saved.
+   */
+  private async notifyApprovers(
+    leave: Prisma.LeaveGetPayload<{ include: typeof LEAVE_INCLUDE }>,
+    orgId: string,
+  ): Promise<void> {
+    const candidates = await this.prisma.client.user.findMany({
+      where: {
+        organizationId: orgId,
+        accountType: 'STAFF',
+        deletedAt: null,
+        id: { not: leave.userId },
+      },
+      select: { id: true },
+    });
+    const approvers: string[] = [];
+    for (let i = 0; i < candidates.length; i += 10) {
+      const chunk = candidates.slice(i, i + 10);
+      const held = await Promise.all(
+        chunk.map((c) => userHasCompanyPermission(c.id, 'hr.leave.approve').catch(() => false)),
+      );
+      chunk.forEach((c, idx) => {
+        if (held[idx]) approvers.push(c.id);
+      });
+    }
+    if (approvers.length === 0) return;
+    const name = leave.user.name?.trim() || leave.user.email;
+    const day = (d: Date) => d.toISOString().slice(0, 10);
+    await this.notifications.emitMany(approvers, {
+      actorId: leave.userId,
+      type: 'LEAVE_REQUESTED',
+      title: 'New leave request',
+      body: `${name} requested ${leave.type.toLowerCase()} leave, ${day(leave.startDate)} to ${day(leave.endDate)}`,
+      entityType: 'leave',
+      entityId: leave.id,
+      url: '/admin/leaves',
+    });
   }
 
   /**

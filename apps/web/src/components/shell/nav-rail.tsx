@@ -6,6 +6,7 @@ import {
   ArrowLeftRight,
   CheckSquare,
   ChevronDown,
+  ClipboardList,
   Clock,
   Download,
   FileText,
@@ -51,6 +52,7 @@ import { UserAvatar } from '@/components/ui/avatar';
 import { Loader } from '@/components/ui/loader';
 import { useChatRooms } from '@/hooks/use-chat';
 import { useDesktopNotifications } from '@/hooks/use-desktop-notifications';
+import { useAddons } from '@/hooks/use-addons';
 import { useNavPrefs } from '@/hooks/use-nav-prefs';
 import { useActiveSupportSession } from '@/hooks/use-support-access';
 import { usePermissions } from '@/hooks/use-permissions';
@@ -140,7 +142,7 @@ const RAIL: RailEntry[] = [
     href: '/projects',
     label: 'Work',
     icon: FolderKanban,
-    match: ['/projects', '/documents'],
+    match: ['/projects', '/documents', '/form-builder'],
     prefkey: 'projects',
   },
   {
@@ -266,6 +268,7 @@ function IconRail({
   const session = useSessionContext();
   const user = session.data?.user;
   const nav = useNavPrefs(user?.id ?? '');
+  const addons = useAddons();
   const sales = useSalesAccess();
   // A read only support session hides Mail and Chat (the API refuses both)
   // and never subscribes the operator's own account to notifications.
@@ -294,6 +297,8 @@ function IconRail({
   const roleVisible: Record<string, boolean> = {
     leads: sales.leads,
     financials: isAdmin || isFinance,
+    // Hidden while the organization has the Mail add-on switched off.
+    mail: addons.isOn('mail'),
     ...(inSupport ? { mail: false, chat: false } : {}),
   };
   const entries = RAIL.filter(
@@ -340,7 +345,8 @@ function IconRail({
           badge={0}
         />
       ) : null}
-      {isHr ? (
+      {/* HR is the HR add-on's: hidden while it is switched off. */}
+      {isHr && addons.isOn('hr') ? (
         <RailItem
           href="/admin/attendance"
           label="HR"
@@ -497,6 +503,7 @@ function ContextSidebar({
   const connected = useSocketConnected();
   const section = sectionFor(pathname);
   const claimed = useNavPanelClaimed() && hostSlot;
+  const addons = useAddons();
 
   return (
     <div
@@ -584,7 +591,7 @@ function ContextSidebar({
           ) : section === 'projects' ? (
             <ProjectGroups />
           ) : (
-            <GroupList groups={staticGroups(section)} />
+            <GroupList groups={staticGroups(section, { hr: addons.isOn('hr') })} />
           )}
         </div>
       )}
@@ -802,7 +809,7 @@ function ProjectGroups() {
  * anything the app has no route for is left out rather than stubbed, so no
  * sidebar entry can 404.
  */
-function staticGroups(section: Section): SidebarGroup[] {
+function staticGroups(section: Section, on: { hr: boolean }): SidebarGroup[] {
   if (section === 'leads') {
     return [
       {
@@ -850,7 +857,8 @@ function staticGroups(section: Section): SidebarGroup[] {
         title: 'Time',
         items: [
           { label: 'Timesheets', href: '/timesheets', icon: Clock, exact: true },
-          { label: 'Time off', href: '/timesheets/leave', icon: CalendarRange },
+          // Time off is the HR add-on's: hidden while it is switched off.
+          ...(on.hr ? [{ label: 'Time off', href: '/timesheets/leave', icon: CalendarRange }] : []),
           { label: 'Calendar', href: '/calendar', icon: CalendarDays },
         ],
         empty: '',
@@ -888,6 +896,7 @@ function staticGroups(section: Section): SidebarGroup[] {
       items: [
         { label: 'Projects', href: '/projects', icon: FolderKanban, exact: true },
         { label: 'Documents', href: '/documents', icon: FileText },
+        { label: 'Forms', href: '/form-builder', icon: ClipboardList },
         { label: 'Timesheets', href: '/timesheets', icon: Clock },
       ],
       empty: '',
@@ -931,7 +940,11 @@ function sectionFor(pathname: string | null): Section {
   if (!pathname) return 'home';
   if (pathname.startsWith('/chat')) return 'chat';
   if (pathname.startsWith('/mail')) return 'mail';
-  if (pathname.startsWith('/projects') || pathname.startsWith('/documents')) {
+  if (
+    pathname.startsWith('/projects') ||
+    pathname.startsWith('/documents') ||
+    pathname.startsWith('/form-builder')
+  ) {
     return 'projects';
   }
   if (pathname.startsWith('/leads') || pathname.startsWith('/clients')) return 'leads';

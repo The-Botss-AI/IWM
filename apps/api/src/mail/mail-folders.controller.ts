@@ -1,11 +1,13 @@
 import { Controller, Get, HttpCode, HttpStatus, Param, Post, Query } from '@nestjs/common';
 import { cuid, type MailFolderResyncQueued } from '@botss/shared-types';
 
+import { RequireAddon } from '../addons/require-addon.decorator';
 import { CurrentUser, type AuthedUser } from '../common/decorators/current-user.decorator';
 import { SkipPermissions } from '../common/decorators/skip-permissions.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { MailReadService } from './mail-read.service';
 
+@RequireAddon('mail')
 @Controller('mail')
 export class MailFoldersController {
   constructor(private readonly read: MailReadService) {}

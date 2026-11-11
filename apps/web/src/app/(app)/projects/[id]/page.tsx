@@ -295,14 +295,14 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           <ComingSoon
             icon={<GitBranch className="h-5 w-5" />}
             title="Development"
-            description="Git provider integration arrives in Phase 3 - link PRs, branches, and reviews to tasks."
+            description="Git provider integration is planned: link PRs, branches, and reviews to tasks."
           />
         )}
         {view === 'code' && (
           <ComingSoon
             icon={<GitBranch className="h-5 w-5" />}
             title="Code"
-            description="Repository browser in-app. Coming with the Phase 3 git integration."
+            description="Repository browser in-app. Coming with the git integration."
           />
         )}
         {view === 'settings' && <ProjectSettingsView project={p} />}

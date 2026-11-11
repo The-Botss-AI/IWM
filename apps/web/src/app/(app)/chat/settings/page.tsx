@@ -143,7 +143,7 @@ export default function ChatSettingsPage() {
         <div className="space-y-4">
           <ToggleRow
             label="Do not disturb"
-            description="Silence all chat sounds and the incoming-call ringer."
+            description="Silence sounds, banners and phone notifications on all your devices. Calls still show silently so you can answer."
             checked={notifications.doNotDisturb}
             onChange={(v) => setChatNotifications({ doNotDisturb: v })}
           />

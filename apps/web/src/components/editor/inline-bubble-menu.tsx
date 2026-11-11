@@ -1,6 +1,7 @@
 'use client';
 
-import { BubbleMenu, type Editor } from '@tiptap/react';
+import type { Editor } from '@tiptap/react';
+import { BubbleMenu, type BubbleMenuProps } from '@tiptap/react/menus';
 import {
   Bold,
   Code,
@@ -18,6 +19,22 @@ interface Props {
   editor: Editor;
 }
 
+// Module-level so these keep one identity across renders. tiptap v3's
+// BubbleMenu dispatches an "update options" transaction whenever `options` or
+// `shouldShow` change identity, and the editor re-renders on every transaction
+// (shouldRerenderOnTransaction), so inline values loop until React aborts with
+// "Maximum update depth exceeded" on the first keystroke.
+const BUBBLE_OPTIONS: BubbleMenuProps['options'] = { placement: 'top' };
+
+const shouldShowBubble: NonNullable<BubbleMenuProps['shouldShow']> = ({ editor, from, to }) => {
+  if (!editor.isEditable) return false;
+  // Hide on collapsed selection or when the cursor is inside an image
+  // node-view (the resize handle would otherwise collide with this menu).
+  if (from === to) return false;
+  if (editor.isActive('image')) return false;
+  return true;
+};
+
 /**
  * Floating toolbar shown above the current text selection. Only inline marks
  * appear here - block-level controls live in the fixed top toolbar where they
@@ -27,15 +44,8 @@ export function InlineBubbleMenu({ editor }: Props) {
   return (
     <BubbleMenu
       editor={editor}
-      tippyOptions={{ duration: 80, placement: 'top' }}
-      shouldShow={({ editor: e, from, to }) => {
-        if (!e.isEditable) return false;
-        // Hide on collapsed selection or when the cursor is inside an image
-        // node-view (the resize handle would otherwise collide with this menu).
-        if (from === to) return false;
-        if (e.isActive('image')) return false;
-        return true;
-      }}
+      options={BUBBLE_OPTIONS}
+      shouldShow={shouldShowBubble}
       className="border-line flex items-center gap-0.5 rounded-md border bg-white p-1 shadow-lg"
     >
       <MarkButton

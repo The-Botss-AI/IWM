@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button';
 import { UserAvatar } from '@/components/ui/avatar';
 import { useFullscreen } from '@/hooks/use-fullscreen';
 import type { LivekitParticipantView, LivekitPhase } from '@/hooks/use-livekit-room';
-import type { ScreenShareQuality } from '@/lib/screen-share-quality';
+import type { ScreenShareQuality } from '@/lib/screen-share-quality-meta';
 import { cn } from '@/lib/utils';
 
 interface Props {

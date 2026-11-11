@@ -30,6 +30,7 @@ import {
 } from '@nestjs/common';
 import { CHAT_REQUEST_SENT_NOTICE } from '@botss/shared-types';
 
+import type { AddonsService } from '../addons/addons.service';
 import { ChatRequestsService } from '../chat/chat-requests.service';
 import { ChatService } from '../chat/chat.service';
 import { LivekitService } from '../livekit/livekit.service';
@@ -416,7 +417,22 @@ function fakePrisma(store: Store) {
       findMany: async ({ where }: { where: Where }) => {
         log.push('chatRoomParticipant.findMany');
         const room = store.rooms.find((r) => r.id === where['roomId']);
-        return room ? room.participants.map((p) => ({ userId: p.userId, role: p.role })) : [];
+        if (!room) return [];
+        return room.participants.map((p) => ({
+          userId: p.userId,
+          role: p.role,
+          user: {
+            organizationId:
+              store.users.find((u) => u['id'] === p.userId)?.['organizationId'] ?? null,
+          },
+        }));
+      },
+    },
+    callSession: {
+      create: async ({ data }: { data: Row }) => {
+        log.push('callSession.create');
+        writes.push('callSession.create');
+        return { id: `cmcall${String(++nextId).padStart(19, '0')}`, startedAt: now, ...data };
       },
     },
     chatRoomMessage: {
@@ -497,10 +513,18 @@ function fakeNotifications() {
   return { notifications: svc as unknown as NotificationsService, emitted };
 }
 
-function build(store: Store) {
+function build(store: Store, opts: { callsOffFor?: string[] } = {}) {
   const fp = fakePrisma(store);
   const { notifications, emitted } = fakeNotifications();
-  const chat = new ChatService(fp.prisma, notifications);
+  // Calls (livekit add-on) switched off for these organizations.
+  const off = new Set(opts.callsOffFor ?? []);
+  const addons = opts.callsOffFor
+    ? ({
+        isEnabled: async (orgId: string) => !off.has(orgId),
+        assertEnabledForUser: async () => undefined,
+      } as unknown as AddonsService)
+    : undefined;
+  const chat = new ChatService(fp.prisma, notifications, undefined, undefined, addons);
   const requests = new ChatRequestsService(fp.prisma, fakeRedis(), notifications, chat);
   return { ...fp, chat, requests, emitted };
 }
@@ -737,6 +761,55 @@ async function main(): Promise<void> {
       'forward into a cross-org DM from another room is a 403',
     );
     assert.deepEqual(t.writes, [], 'refused share / forward write nothing');
+
+    // Calls across the org line ring only receivers whose organization has
+    // calls on, and refuse (writing nothing) when nobody can be rung.
+    {
+      const ROOM_MIX = 'cmroommix0000000000000000';
+      store.rooms.push({
+        id: ROOM_MIX,
+        type: 'GROUP',
+        workspaceId: null,
+        createdById: SENDER,
+        participants: [
+          { id: 'cmpm1', userId: SENDER, role: 'ADMIN' },
+          { id: 'cmpm2', userId: REQ_OK, role: 'MEMBER' },
+          { id: 'cmpm3', userId: ME, role: 'MEMBER' },
+        ],
+      });
+      const offB = build(store, { callsOffFor: [ORG_B] });
+      await assert.rejects(
+        offB.chat.assertCallsEnabled(SENDER, ROOM_X),
+        (err: unknown) =>
+          err instanceof ForbiddenException &&
+          (err.getResponse() as { code?: string }).code === 'addon-disabled',
+        'pre-check refuses a cross-org DM whose other side has calls off',
+      );
+      await assert.rejects(
+        offB.chat.initiateCall(SENDER, 'socket-x', ROOM_X),
+        (err: unknown) =>
+          err instanceof ForbiddenException &&
+          (err.getResponse() as { code?: string }).code === 'addon-disabled',
+        'nobody to ring across the org line: addon-disabled',
+      );
+      assert.deepEqual(offB.writes, [], 'refused call writes nothing');
+      const mixed = await offB.chat.initiateCall(SENDER, 'socket-x', ROOM_MIX);
+      assert.deepEqual(mixed.receiverUserIds, [REQ_OK], 'the org with calls off is not rung');
+      const allOn = await build(store, { callsOffFor: [] }).chat.initiateCall(
+        SENDER,
+        'socket-y',
+        ROOM_MIX,
+      );
+      assert.deepEqual(
+        allOn.receiverUserIds.sort(),
+        [REQ_OK, ME].sort(),
+        'calls on everywhere: everyone rung',
+      );
+      store.rooms.splice(
+        store.rooms.findIndex((r) => r.id === ROOM_MIX),
+        1,
+      );
+    }
 
     // Blocking from the DM needs a shared cross-org DM; anyone else is a 404.
     await assert.rejects(

@@ -16,6 +16,8 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MailFolder, MailMessage } from '@botss/shared-types';
 
+import { AddonOffNotice } from '@/components/addons/addon-off-notice';
+import { useAddons } from '@/hooks/use-addons';
 import type { ComposePrefill } from '@/components/mail/compose-mail-dialog';
 import { FolderList } from '@/components/mail/folder-list';
 import { NavPanelPortal, useNavPanelAvailable } from '@/components/shell/nav-panel-slot';
@@ -30,6 +32,7 @@ import { useMailAccounts } from '@/hooks/use-mail-accounts';
 import { useHasOpened } from '@/hooks/use-has-opened';
 import { useMailEvents } from '@/hooks/use-mail-events';
 import { useMailFolders, useMailMessage } from '@/hooks/use-mail';
+import { env } from '@/lib/env';
 import { getApi } from '@/lib/api';
 import { toastError } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -47,8 +50,7 @@ const ComposeMailDialog = dynamic(
 // Domain of mailboxes the server auto-provisions for. Mirrors CPANEL_DOMAIN
 // on the API; set as NEXT_PUBLIC_CPANEL_DOMAIN at build time.
 const ROOT_ORG_ID = 'org_root_thebotss';
-// Empty when unset: then no one is offered self-serve mailbox setup.
-const CPANEL_DOMAIN = (process.env.NEXT_PUBLIC_CPANEL_DOMAIN ?? '').trim().toLowerCase();
+const CPANEL_DOMAIN = env.cpanelDomain;
 
 // Friendly folder labels for the phone "Folders" button. Mirrors the
 // sidebar's ROLE_LABELS in folder-list.tsx so canonical folders read the
@@ -72,7 +74,7 @@ const FOLDER_ROLE_LABELS: Record<NonNullable<MailFolder['role']>, string> = {
  * page level so future deep links (?account=, ?folder=, ?msg=) can be wired
  * without restructuring.
  */
-export default function MailPage() {
+function MailPageContent() {
   const session = useSessionContext();
   const accounts = useMailAccounts();
   const items = accounts.data?.items ?? [];
@@ -80,10 +82,12 @@ export default function MailPage() {
   const connectingAccounts = items.filter((a) => a.status === 'CONNECTING');
 
   const userEmail = (session.data?.user?.email ?? '').toLowerCase();
+  const cpanelOn = useAddons().isOn('cpanel');
   // The cPanel server is the platform's: only root-org users can self-set up.
   const isOnCpanelDomain =
-    !!CPANEL_DOMAIN &&
     session.data?.user?.organizationId === ROOT_ORG_ID &&
+    cpanelOn &&
+    CPANEL_DOMAIN !== '' &&
     userEmail.endsWith(`@${CPANEL_DOMAIN}`);
   const [selfSetupOpen, setSelfSetupOpen] = useState(false);
 
@@ -634,4 +638,11 @@ function quoteBody(message: MailMessage): string {
     .map((l) => `> ${l}`)
     .join('\n');
   return `On ${date}, ${sender} wrote:\n${lines}`;
+}
+
+/** Hidden while the organization has the Mail add-on switched off. */
+export default function MailPage() {
+  const addons = useAddons();
+  if (!addons.isOn('mail')) return <AddonOffNotice name="Mail" />;
+  return <MailPageContent />;
 }

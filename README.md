@@ -30,21 +30,23 @@ IWM replaces a stack of separate tools (chat, tasks, docs, CRM, invoicing, mail,
 - **Projects and tasks**: boards, sprints, goals, saved views, custom fields, task forms, comments, per-project roles and permissions.
 - **Leads and clients**: pipeline stages and follow-ups, client hub, client portal with shared documents and signature requests.
 - **Invoices and finance**: invoice templates rendered to PDF, contracts, milestones, payments, expenses, payment sources.
-- **Communication**: channels, DMs and group chats with reactions and replies, presence, notifications on every device, LiveKit voice/video calls and screen share.
+- **Communication**: channels, DMs and group chats with reactions and replies, presence, notifications on every device, LiveKit voice/video calls and screen share. Calls still reach people in Do Not Disturb, silently.
+- **Forms**: a form builder with 40+ field types (choices, ratings, file and image uploads, signatures, addresses, locations, matrices, repeaters, calculated fields), conditional logic, public share links with an optional Cloudflare Turnstile bot check, and a responses view.
 - **Mail**: per-user IMAP/SMTP accounts with signatures.
 - **Documents and files**: rich-text editor (Tiptap), revisions, shareable public links, object storage for uploads.
-- **HR**: attendance, leave, holidays, timesheets, payroll with payslips.
-- **Organizations and access**: multi-organization tenancy, role-based and attribute-based permissions (CASL), audit log, time-limited support access, security alerts, device sessions with "remember me".
+- **HR**: attendance, leave (HR is alerted to new requests), holidays, timesheets, payroll with payslips.
+- **Organizations and access**: multi-organization tenancy, email domains verified through DNS, role-based and attribute-based permissions (CASL), audit log, time-limited support access, security alerts, device sessions with "remember me".
+- **Add-ons**: each organization switches optional modules (mail, cPanel mailboxes, video calls, HR) on or off and keeps their settings, encrypted. Switched-off features are hidden.
 - **Search**: PostgreSQL full-text search with Slack-style filters such as `in:#channel`, `from:@person`, `has:file`.
+- **Error monitoring (optional)**: Sentry for the API, worker and web app, with personal data scrubbed before anything is sent.
 
 ### Planned
 
 - Row-level security in PostgreSQL as a second tenant isolation layer.
-- An add-on interface so optional services (mail, SMS, video, payments) are switched on per organization.
 - Personal API tokens and an MCP server so AI assistants can act with scoped permissions.
 - Live co-editing of documents (Yjs and Hocuspocus).
 - Published Docker images, a Helm chart and a first-run setup screen.
-- Polar payments and Twilio SMS/PSTN (the env vars exist, the integration does not yet).
+- Polar payments, Twilio SMS/PSTN and AI assistants (their add-ons are listed as "Not available yet").
 
 Details and status for each item are in [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -73,6 +75,7 @@ packages/
   shared-types/  Zod schemas and shared TypeScript types
   api-client/    Typed SDK the frontends use to call the API
   auth/          Better Auth config and CASL abilities
+  forms/         Form definitions: field types, logic, calculations, answer validation
   config/        Shared eslint, tsconfig and tailwind preset
 docker/          Postgres init script (pg_trgm), Docker entrypoints for the app image
 docker-compose.yml  Local Postgres, Redis, MinIO, Gotenberg, LiveKit; IWM itself with --profile app
@@ -120,6 +123,25 @@ If a step fails it says what to fix. Run it again afterwards and it skips what i
 
 To run one app only: `pnpm dev --filter=@botss/web` or `pnpm dev --filter=@botss/api` (API at http://localhost:4000/api/v1).
 
+### Upgrading an existing install
+
+This release only adds to the schema; there are no drops or renames, so no data is lost:
+
+- new tables `OrganizationAddon`, `OrganizationDomain`, `Form`, `FormVersion`, `FormAccess`, `FormSubmission`, `FormUpload`,
+- new nullable `Account` columns `accessTokenExpiresAt`, `refreshTokenExpiresAt`, `scope`,
+- new enum values `LEAVE_REQUESTED`, `FORM_SUBMITTED`, `FORM_SHARED`.
+
+Migrations are not in the repo, so create the one for this change yourself, then restart the API and worker.
+
+- **Development:** `pnpm db:migrate --name forms_addons_domains` (writes the migration and applies it).
+- **Production:** never run `migrate dev` against production. Against a dev copy of the database run `pnpm --filter @botss/database exec prisma migrate dev --create-only --name forms_addons_domains`, review the SQL, copy the migration folder to the production checkout, then run `pnpm --filter @botss/database exec prisma migrate deploy` there.
+- **Docker only:** `docker compose --profile app up -d --build`. The `db-setup` step applies your migrations, then compares `schema.prisma` with the database and, if it is behind, writes and applies an `_upgrade` migration into `packages/database/prisma/migrations`. It only does this for purely additive changes: if the difference would drop, rename or delete anything (for example SQL-only indexes from your own migrations) it stops and prints the SQL so you can handle it yourself. Fresh installs still get an `init` migration as before.
+
+Two behaviour changes to check:
+
+- `NEXT_PUBLIC_MAIL_DEFAULT_IMAP_HOST` and `NEXT_PUBLIC_MAIL_DEFAULT_SMTP_HOST` are replaced by `NEXT_PUBLIC_MAIL_DEFAULT_HOST` (rebuild the web app after renaming).
+- Mail is no longer routed automatically by `Organization.emailDomain`. An organization now needs a DNS-verified domain in Settings > Domains plus a verified email.
+
 ### Run everything in Docker
 
 No Node or pnpm needed, only Docker with Compose 2.24 or newer:
@@ -142,6 +164,8 @@ A `.env` is optional. Without one, the API generates `BETTER_AUTH_SECRET` and `M
 | Start over, deleting all IWM data | `docker compose --profile app down -v`         |
 
 What happens on `up`: Postgres, Redis, MinIO and Gotenberg start, `minio-init` creates the uploads bucket, `db-setup` creates the schema and seeds the demo data (on a database with no users only), then the API (port 4000) and the web app (port 3000) start.
+
+If an update changes `packages/database/prisma/schema.prisma`, existing installs need a migration for it first; see "Migration history" under [Not included in this release](#11-not-included-in-this-release).
 
 Docker and `pnpm quickstart` share the same database and migration history, so you can switch between them. Stop the `app` containers before `pnpm dev` (both use ports 3000 and 4000). If you started with Docker and no `.env` and later move to `pnpm dev`, copy the generated secrets into `.env` first, or mailbox passwords saved under Docker cannot be decrypted:
 
@@ -276,17 +300,20 @@ Never put real secrets in the example files or in git. In production, pass them 
 | `MAX_UPLOAD_BYTES`             | Optional | Largest single upload in bytes (default 250 MB).                                                                                                | `262144000`                                                   |
 | `CHAT_ATTACHMENT_URL_PREFIXES` | Optional | Extra URL prefixes accepted for chat attachments besides `S3_PUBLIC_URL` and `S3_ENDPOINT`, comma separated. Usually empty.                     | `https://cdn.example.com/`                                    |
 | `ROLE`                         | Optional | Process role: `all`, `api` or `worker`. Read from the real process environment only, not from `.env`. See [Process roles](#7-process-roles).    | `worker`                                                      |
-| `WORKER_HEALTH_PORT`           | Optional | Health check port of a `worker` process (default 4100). Real process environment only. Not in `.env.example`.                                   | `4100`                                                        |
+| `WORKER_HEALTH_PORT`           | Optional | Health check port of a `worker` process (default 4100). Real process environment only.                                                          | `4100`                                                        |
+| `CHAT_FANOUT_CONCURRENCY`      | Optional | Parallel jobs on the chat fan-out queue (push and bell notifications for new messages). Default 5.                                              | `5`                                                           |
 
 ### HR and payroll
 
-| Name                      | Required | What it does                                                                                                                                                | Example                      |
-| ------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
-| `HR_EMAIL_DOMAIN`         | Optional | Turns on the daily timesheet warnings for the organization with this email domain; only users on this domain are scanned and notified. Unset: warnings off. | `example.com`                |
-| `HR_SENDER_EMAIL`         | Optional | Existing user the timesheet warnings are sent from. Needed together with `HR_EMAIL_DOMAIN`. Unset: warnings off.                                            | `hr@example.com`             |
-| `PAYSLIP_SIGNATORY_NAME`  | Optional | Signatory printed on the root (platform) organization's own payslips. Other organizations never get it. Unset: no signatory block.                          | `Jane Doe`                   |
-| `PAYSLIP_SIGNATORY_TITLE` | Optional | Signatory's title. Unset: blank.                                                                                                                            | `CEO`                        |
-| `PAYSLIP_TEMPLATES_DIR`   | Optional | Where the payslip template lives. Unset: `apps/api/payslip-templates/default`.                                                                              | `/srv/iwm/payslip-templates` |
+Each organization sets its timesheet warnings and payslip signatory in Settings > Add-ons > HR. The variables below are only a fallback for the root (platform) organization while it has no HR settings of its own; other organizations never use them.
+
+| Name                      | Required | What it does                                                                                                                                        | Example                      |
+| ------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| `HR_EMAIL_DOMAIN`         | Optional | Turns on the daily timesheet warnings for the root organization; only its users on this email domain are scanned and notified. Unset: warnings off. | `example.com`                |
+| `HR_SENDER_EMAIL`         | Optional | Existing user the timesheet warnings are sent from. Needed together with `HR_EMAIL_DOMAIN`. Unset: warnings off.                                    | `hr@example.com`             |
+| `PAYSLIP_SIGNATORY_NAME`  | Optional | Signatory printed on the root organization's own payslips. Unset: no signatory block.                                                               | `Jane Doe`                   |
+| `PAYSLIP_SIGNATORY_TITLE` | Optional | Signatory's title. Unset: blank.                                                                                                                    | `CEO`                        |
+| `PAYSLIP_TEMPLATES_DIR`   | Optional | Where the payslip template lives. Unset: `apps/api/payslip-templates/default`.                                                                      | `/srv/iwm/payslip-templates` |
 
 ### Website lead intake
 
@@ -298,16 +325,19 @@ Never put real secrets in the example files or in git. In production, pass them 
 
 ### Web app
 
-| Name                                 | Required | What it does                                                                                                                                        | Example                   |
-| ------------------------------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| `NEXT_PUBLIC_API_URL`                | Required | Where the browser reaches the API. In both `.env.example` and `apps/web/.env.example`.                                                              | `http://localhost:4000`   |
-| `NEXT_PUBLIC_API_BASE_PATH`          | Required | API path prefix, same as `API_BASE_PATH`. In both files.                                                                                            | `/api/v1`                 |
-| `NEXT_PUBLIC_WEB_URL`                | Optional | Public origin of the web app, used for absolute OG and Twitter image URLs.                                                                          | `https://app.example.com` |
-| `NEXT_PUBLIC_VAPID_PUBLIC_KEY`       | Optional | Browser Web Push public key. Must equal `VAPID_PUBLIC_KEY`. Lives in `apps/web/.env.example`, needed at build time. Blank disables closed-tab push. | `BN...`                   |
-| `NEXT_PUBLIC_CPANEL_DOMAIN`          | Optional | Domain cPanel-managed mailboxes live under, mirrors `CPANEL_DOMAIN`. Unset: no one is offered self-serve mailbox setup. In `apps/web/.env.example`. | `example.com`             |
-| `NEXT_PUBLIC_ADMIN_EMAIL`            | Optional | Mirrors `ADMIN_EMAIL` so the users page shows that account as protected. Unset: none shown as protected. In `apps/web/.env.example`.                | `admin@example.com`       |
-| `NEXT_PUBLIC_MAIL_DEFAULT_IMAP_HOST` | Optional | IMAP host pre-filled in the Add mail account form. Unset: empty field. In `apps/web/.env.example`.                                                  | `mail.example.com`        |
-| `NEXT_PUBLIC_MAIL_DEFAULT_SMTP_HOST` | Optional | SMTP host pre-filled in the Add mail account form. Unset: empty field. In `apps/web/.env.example`.                                                  | `mail.example.com`        |
+| Name                             | Required | What it does                                                                                                                                                | Example                   |
+| -------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| `NEXT_PUBLIC_API_URL`            | Required | Where the browser reaches the API. In both `.env.example` and `apps/web/.env.example`.                                                                      | `http://localhost:4000`   |
+| `NEXT_PUBLIC_API_BASE_PATH`      | Required | API path prefix, same as `API_BASE_PATH`. In both files.                                                                                                    | `/api/v1`                 |
+| `NEXT_PUBLIC_WEB_URL`            | Optional | Public origin of the web app, used for absolute OG and Twitter image URLs.                                                                                  | `https://app.example.com` |
+| `NEXT_PUBLIC_VAPID_PUBLIC_KEY`   | Optional | Browser Web Push public key. Must equal `VAPID_PUBLIC_KEY`. Lives in `apps/web/.env.example`, needed at build time. Blank disables closed-tab push.         | `BN...`                   |
+| `NEXT_PUBLIC_CPANEL_DOMAIN`      | Optional | Domain cPanel-managed mailboxes live under, mirrors `CPANEL_DOMAIN`. Unset: no one is offered self-serve mailbox setup. In `apps/web/.env.example`.         | `example.com`             |
+| `NEXT_PUBLIC_ADMIN_EMAIL`        | Optional | Mirrors `ADMIN_EMAIL` so the users page shows that account as protected. Unset: none shown as protected. In `apps/web/.env.example`.                        | `admin@example.com`       |
+| `NEXT_PUBLIC_MAIL_DEFAULT_HOST`  | Optional | Host pre-filled as both IMAP and SMTP host in the Add mail account form, mirrors `MAIL_DEFAULT_IMAP_HOST`. Unset: empty fields. In `apps/web/.env.example`. | `mail.example.com`        |
+| `NEXT_PUBLIC_AUTH_COOKIE_PREFIX` | Optional | Session cookie prefix the edge sign-in redirect looks for. Must equal `AUTH_COOKIE_PREFIX`. In `apps/web/.env.example`.                                     | `iwm-staging`             |
+| `NEXT_PUBLIC_EDGE_AUTH_REDIRECT` | Optional | `1` sends signed-out visits straight to `/sign-in` before the app loads. Only when `AUTH_COOKIE_DOMAIN` makes the session cookie visible to the web host.   | `1`                       |
+| `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | Optional | Cloudflare Turnstile site key for the bot check on public forms. Pair it with `TURNSTILE_SECRET_KEY`. Unset: no widget.                                     | `0x4AAAA...`              |
+| `API_INTERNAL_URL`               | Optional | Server-only, read at run time: where the web server reaches the API when that is not `NEXT_PUBLIC_API_URL` (the Docker setup uses `http://api:4000`).       | `http://api:4000`         |
 
 ### System email (invitations, resets, invoices sent from the platform)
 
@@ -323,20 +353,22 @@ Never put real secrets in the example files or in git. In production, pass them 
 
 ### User mail (IMAP/SMTP client)
 
-| Name                      | Required | What it does                                                                                                                                              | Example                |
-| ------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
-| `MAIL_ENCRYPTION_KEY`     | Required | 64 hex characters (32 bytes). Encrypts stored IMAP/SMTP passwords. Do not rotate on an install that has mail accounts.                                    | `openssl rand -hex 32` |
-| `MAIL_DEFAULT_IMAP_HOST`  | Optional | IMAP host used when the server auto-provisions a mail account for a cPanel-managed user. Needs `MAIL_DEFAULT_SMTP_HOST` too. Unset: no auto-provisioning. | `mail.example.com`     |
-| `MAIL_DEFAULT_SMTP_HOST`  | Optional | SMTP host for auto-provisioned mail accounts. Unset: no auto-provisioning.                                                                                | `mail.example.com`     |
-| `MAIL_SYNC_BATCH`         | Optional | Messages fetched per IMAP round trip.                                                                                                                     | `25`                   |
-| `MAIL_INITIAL_SYNC_LIMIT` | Optional | Most messages imported per run (the rest continue in the background).                                                                                     | `200`                  |
-| `MAIL_MAX_SOURCE_BYTES`   | Optional | Above this size only a message's text parts are downloaded, not attachments.                                                                              | `15728640`             |
-| `MAIL_SEND_CONCURRENCY`   | Optional | Parallel outbound sends on the mail queue.                                                                                                                | `5`                    |
-| `MAIL_RELAY_HOST`         | Optional | Send all outbound user mail through this SMTP relay instead of each account's own SMTP. Useful when a mail host rate-limits your server's IP.             | `smtp-relay.brevo.com` |
-| `MAIL_RELAY_PORT`         | Optional | Relay port.                                                                                                                                               | `587`                  |
-| `MAIL_RELAY_SECURE`       | Optional | `true` for implicit TLS.                                                                                                                                  | `false`                |
-| `MAIL_RELAY_USER`         | Optional | Relay login.                                                                                                                                              | (relay user)           |
-| `MAIL_RELAY_PASSWORD`     | Optional | Relay password.                                                                                                                                           | (secret)               |
+| Name                              | Required | What it does                                                                                                                                                 | Example                |
+| --------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------- |
+| `MAIL_ENCRYPTION_KEY`             | Required | 64 hex characters (32 bytes). Encrypts stored IMAP/SMTP passwords, organization mail settings and add-on secrets. Do not rotate on an install that has them. | `openssl rand -hex 32` |
+| `MAIL_DEFAULT_IMAP_HOST`          | Optional | IMAP host used when the server auto-provisions a mail account for a cPanel-managed user. Needs `MAIL_DEFAULT_SMTP_HOST` too. Unset: no auto-provisioning.    | `mail.example.com`     |
+| `MAIL_DEFAULT_SMTP_HOST`          | Optional | SMTP host for auto-provisioned mail accounts. Unset: no auto-provisioning.                                                                                   | `mail.example.com`     |
+| `MAIL_SYNC_BATCH`                 | Optional | Messages fetched per IMAP round trip.                                                                                                                        | `25`                   |
+| `MAIL_INITIAL_SYNC_LIMIT`         | Optional | Most messages imported per run (the rest continue in the background).                                                                                        | `200`                  |
+| `MAIL_MAX_SOURCE_BYTES`           | Optional | Above this size only a message's text parts are downloaded, not attachments.                                                                                 | `15728640`             |
+| `MAIL_SEND_CONCURRENCY`           | Optional | Parallel outbound sends on the mail queue.                                                                                                                   | `5`                    |
+| `MAIL_FLAG_RECONCILE_WINDOW`      | Optional | How many of the newest messages per folder have their read/unread flags re-checked against the server (default 500).                                         | `500`                  |
+| `MAIL_FLAG_RECONCILE_INTERVAL_MS` | Optional | Minimum gap between two flag re-checks of one folder, in ms (default 60000).                                                                                 | `60000`                |
+| `MAIL_RELAY_HOST`                 | Optional | Send all outbound user mail through this SMTP relay instead of each account's own SMTP. Useful when a mail host rate-limits your server's IP.                | `smtp-relay.brevo.com` |
+| `MAIL_RELAY_PORT`                 | Optional | Relay port.                                                                                                                                                  | `587`                  |
+| `MAIL_RELAY_SECURE`               | Optional | `true` for implicit TLS.                                                                                                                                     | `false`                |
+| `MAIL_RELAY_USER`                 | Optional | Relay login.                                                                                                                                                 | (relay user)           |
+| `MAIL_RELAY_PASSWORD`             | Optional | Relay password.                                                                                                                                              | (secret)               |
 
 ### cPanel mailbox provisioning
 
@@ -350,17 +382,18 @@ Never put real secrets in the example files or in git. In production, pass them 
 
 ### Object storage (S3 compatible)
 
-| Name                            | Required | What it does                                                                                                                                                                       | Example                     |
-| ------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
-| `S3_ENDPOINT`                   | Required | S3 API endpoint (MinIO locally, R2 or S3 in production).                                                                                                                           | `http://localhost:9100`     |
-| `S3_REGION`                     | Required | Region name. Use `auto` for R2.                                                                                                                                                    | `us-east-1`                 |
-| `S3_ACCESS_KEY_ID`              | Required | Access key.                                                                                                                                                                        | `botss-local`               |
-| `S3_SECRET_ACCESS_KEY`          | Required | Secret key.                                                                                                                                                                        | (secret)                    |
-| `S3_BUCKET`                     | Required | Bucket for uploads.                                                                                                                                                                | `botss-files`               |
-| `S3_FORCE_PATH_STYLE`           | Optional | `true` for MinIO and R2's raw S3 API.                                                                                                                                              | `true`                      |
-| `S3_PUBLIC_URL`                 | Optional | Public base URL for files. Leave unset locally; set to your CDN host in production.                                                                                                | `https://files.example.com` |
-| `S3_PUBLIC_URL_INCLUDES_BUCKET` | Optional | `true` (default) builds `<host>/<bucket>/<key>`. `false` builds `<host>/<key>`, needed for a custom domain mapped to one R2 bucket. A wrong value shows up as files returning 404. | `false`                     |
-| `S3_PRESIGN_ENDPOINT`           | Optional | Endpoint browsers upload to when it differs from `S3_ENDPOINT`; upload URLs are signed for this host. The Docker setup sets it.                                                    | `http://localhost:9100`     |
+| Name                            | Required | What it does                                                                                                                                                                                  | Example                     |
+| ------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| `S3_ENDPOINT`                   | Required | S3 API endpoint (MinIO locally, R2 or S3 in production).                                                                                                                                      | `http://localhost:9100`     |
+| `S3_REGION`                     | Required | Region name. Use `auto` for R2.                                                                                                                                                               | `us-east-1`                 |
+| `S3_ACCESS_KEY_ID`              | Required | Access key.                                                                                                                                                                                   | `botss-local`               |
+| `S3_SECRET_ACCESS_KEY`          | Required | Secret key.                                                                                                                                                                                   | (secret)                    |
+| `S3_BUCKET`                     | Required | Bucket for uploads.                                                                                                                                                                           | `botss-files`               |
+| `S3_FORCE_PATH_STYLE`           | Optional | `true` for MinIO and R2's raw S3 API.                                                                                                                                                         | `true`                      |
+| `S3_PUBLIC_URL`                 | Optional | Public base URL for files. Leave unset locally; set to your CDN host in production.                                                                                                           | `https://files.example.com` |
+| `S3_PUBLIC_URL_INCLUDES_BUCKET` | Optional | `true` (default) builds `<host>/<bucket>/<key>`. `false` builds `<host>/<key>`, needed for a custom domain mapped to one R2 bucket. A wrong value shows up as files returning 404.            | `false`                     |
+| `S3_PRESIGN_ENDPOINT`           | Optional | Endpoint browsers upload to when it differs from `S3_ENDPOINT`; upload URLs are signed for this host. The Docker setup sets it.                                                               | `http://localhost:9100`     |
+| `S3_FORMS_BUCKET`               | Optional | Bucket for files people upload through forms. Recommended in production: a bucket without public read, so form files are only reachable through short-lived signed links. Unset: `S3_BUCKET`. | `botss-form-files`          |
 
 ### PDFs
 
@@ -379,20 +412,44 @@ Never put real secrets in the example files or in git. In production, pass them 
 
 ### Web Push
 
-| Name                | Required | What it does                                                                               | Example                    |
-| ------------------- | -------- | ------------------------------------------------------------------------------------------ | -------------------------- |
-| `VAPID_SUBJECT`     | Optional | Contact URL push services require. All three VAPID values must be set or push is disabled. | `mailto:admin@example.com` |
-| `VAPID_PUBLIC_KEY`  | Optional | Public key. Generate a pair with `npx web-push generate-vapid-keys`.                       | `BN...`                    |
-| `VAPID_PRIVATE_KEY` | Optional | Private key.                                                                               | (secret)                   |
+| Name                | Required | What it does                                                                                           | Example                    |
+| ------------------- | -------- | ------------------------------------------------------------------------------------------------------ | -------------------------- |
+| `VAPID_SUBJECT`     | Optional | Contact URL push services require. All three VAPID values must be set or push is disabled.             | `mailto:admin@example.com` |
+| `VAPID_PUBLIC_KEY`  | Optional | Public key. Generate a pair with `npx web-push generate-vapid-keys`.                                   | `BN...`                    |
+| `VAPID_PRIVATE_KEY` | Optional | Private key.                                                                                           | (secret)                   |
+| `EXPO_ACCESS_TOKEN` | Optional | Expo access token for native mobile push. Sending works without it; it only raises Expo's rate limits. | (secret)                   |
 
-### Placeholders for later phases
+### Forms
 
-| Name                   | Required | What it does                                   | Example |
-| ---------------------- | -------- | ---------------------------------------------- | ------- |
-| `POLAR_ACCESS_TOKEN`   | Optional | Reserved for Polar invoicing. Not used yet.    | blank   |
-| `POLAR_WEBHOOK_SECRET` | Optional | Reserved for Polar webhooks. Not used yet.     | blank   |
-| `TWILIO_ACCOUNT_SID`   | Optional | Reserved for SMS and PSTN calls. Not used yet. | blank   |
-| `TWILIO_AUTH_TOKEN`    | Optional | Reserved for Twilio. Not used yet.             | blank   |
+| Name                             | Required | What it does                                                                                                                       | Example      |
+| -------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| `TURNSTILE_SECRET_KEY`           | Optional | Cloudflare Turnstile secret key. When set, public form submits must pass the bot check (and fail if Cloudflare cannot be reached). | (secret)     |
+| `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | Optional | Site key that shows the Turnstile widget on public forms. In `apps/web/.env.example`, needed at build time.                        | `0x4AAAA...` |
+
+### Error monitoring (Sentry)
+
+Off unless a DSN is set: no SDK is loaded and nothing is sent. Personal data (emails, tokens, request bodies, IP addresses) is scrubbed before an event leaves the server or browser.
+
+| Name                                                | Required | What it does                                                                                                                                                      | Example                     |
+| --------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| `SENTRY_DSN`                                        | Optional | Sentry DSN for the API and worker.                                                                                                                                | `https://...@sentry.io/...` |
+| `SENTRY_ENVIRONMENT`                                | Optional | Environment name. Unset: `NODE_ENV`. Use a different value per deployment.                                                                                        | `production`                |
+| `SENTRY_RELEASE`                                    | Optional | Release name attached to events.                                                                                                                                  | `iwm@1.2.3`                 |
+| `SENTRY_TRACES_SAMPLE_RATE`                         | Optional | Share of requests traced, 0 to 1. `0` reports errors only.                                                                                                        | `0`                         |
+| `NEXT_PUBLIC_SENTRY_DSN`                            | Optional | The same for the web app, in `apps/web/.env.example`, together with `NEXT_PUBLIC_SENTRY_ENVIRONMENT`, `_RELEASE` and `_TRACES_SAMPLE_RATE`. Needed at build time. | `https://...@sentry.io/...` |
+| `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` | Optional | Build-time only: upload the web app's source maps to Sentry when all three are set.                                                                               | (secret)                    |
+
+### Reserved (not used yet)
+
+The Polar and Twilio add-ons are listed in the app as "Not available yet". Nothing reads these variables today; leave them blank.
+
+| Name                   | Required | What it does                               | Example |
+| ---------------------- | -------- | ------------------------------------------ | ------- |
+| `POLAR_ACCESS_TOKEN`   | Optional | Reserved for Polar invoice payments.       | blank   |
+| `POLAR_WEBHOOK_SECRET` | Optional | Reserved for Polar webhooks.               | blank   |
+| `TWILIO_ACCOUNT_SID`   | Optional | Reserved for SMS and PSTN calls.           | blank   |
+| `TWILIO_AUTH_TOKEN`    | Optional | Reserved for Twilio.                       | blank   |
+| `TWILIO_FROM_NUMBER`   | Optional | Reserved for Twilio (E.164 sender number). | blank   |
 
 ### Desktop and mobile shells
 
@@ -416,7 +473,23 @@ Users add their own mail accounts in the app (Settings, Mail). Set `MAIL_ENCRYPT
 
 ### cPanel mailbox provisioning
 
-If your mail runs on cPanel, set all five `CPANEL_*` vars, `MAIL_DEFAULT_IMAP_HOST` and `MAIL_DEFAULT_SMTP_HOST`, and `NEXT_PUBLIC_CPANEL_DOMAIN`. The admin Users panel can then create, rotate and import mailboxes. Without them the panel still works and does not touch the mail server.
+If your mail runs on cPanel, set all five `CPANEL_*` vars, `MAIL_DEFAULT_IMAP_HOST` and `MAIL_DEFAULT_SMTP_HOST`, and `NEXT_PUBLIC_CPANEL_DOMAIN`. The admin Users panel can then create, rotate and import mailboxes for the root (platform) organization. Without them the panel still works and does not touch the mail server.
+
+### Add-ons
+
+Organization admins switch optional modules on or off in Settings > Add-ons: Mail, cPanel mailboxes, video and voice calls (an organization can use its own LiveKit server) and HR (leave, attendance, payroll, timesheet warnings and the payslip signatory). Everything is on by default except the reserved AI add-on. Switched-off features disappear from the apps and their API routes refuse requests. Add-on secrets are stored encrypted with `MAIL_ENCRYPTION_KEY`. Polar, Twilio and AI are listed but not available yet.
+
+### Email domains
+
+In Settings > Domains an organization claims the domain its staff use and proves it with a DNS TXT record. Once verified, a staff account on that domain that has no organization yet is placed in it at sign-in. A domain that belongs to another organization cannot be claimed, and neither can `CPANEL_DOMAIN` (the platform's mail domain) by anyone but the root organization.
+
+### Forms bot check (Cloudflare Turnstile)
+
+Public form links work without it. To stop bots, create a Turnstile widget in Cloudflare and set `TURNSTILE_SECRET_KEY` on the API and `NEXT_PUBLIC_TURNSTILE_SITE_KEY` in `apps/web` (before `next build`). For private storage of uploaded answers set `S3_FORMS_BUCKET` to a bucket without public read.
+
+### Error monitoring (Sentry)
+
+Set `SENTRY_DSN` for the API and worker and `NEXT_PUBLIC_SENTRY_DSN` for the web app (before `next build`). Without them nothing is loaded or sent. Events are scrubbed of personal data first; see [Configuration](#error-monitoring-sentry) for the other values.
 
 ### LiveKit calls
 
@@ -471,7 +544,7 @@ Both are thin shells around the hosted web app. The desktop app adds a tray, dee
 
 ## 9. Invoice and payslip templates
 
-Each folder in `apps/api/invoice-templates/` is one invoice design: `template.html`, optional `styles.css`, `meta.json` and `assets/`. Copy `default/` to start your own. The payslip layout is in `apps/api/payslip-templates/default/` (`template.html`, `styles.css`, `logo.png`, `stamp.png`). Replace the placeholder logo and stamp, and set the signatory with `PAYSLIP_SIGNATORY_NAME` and `PAYSLIP_SIGNATORY_TITLE`. Logo, stamp and signatory appear only on the root (platform) organization's payslips. Templates reload when their files change. `pnpm test` validates them. Use `INVOICE_TEMPLATES_DIR` to keep templates outside the repo. PDFs are rendered by Gotenberg.
+Each folder in `apps/api/invoice-templates/` is one invoice design: `template.html`, optional `styles.css`, `meta.json` and `assets/`. Copy `default/` to start your own. The payslip layout is in `apps/api/payslip-templates/default/` (`template.html`, `styles.css`, `logo.png`, `stamp.png`). Replace the placeholder logo and stamp. Each organization sets its payslip signatory in Settings > Add-ons > HR; the root (platform) organization falls back to `PAYSLIP_SIGNATORY_NAME` and `PAYSLIP_SIGNATORY_TITLE`. The logo and stamp appear only on the root organization's payslips. Templates reload when their files change. `pnpm test` validates them. Use `INVOICE_TEMPLATES_DIR` to keep templates outside the repo. PDFs are rendered by Gotenberg.
 
 ## 10. Common commands
 
@@ -484,7 +557,7 @@ pnpm start                # run built apps (start:api, start:web for one)
 pnpm typecheck            # tsc across packages
 pnpm lint                 # eslint
 pnpm test                 # package tests and the API check scripts
-pnpm verify               # typecheck + lint + test
+pnpm verify               # typecheck + lint + test + Docker config check
 pnpm format               # prettier write (format:check to verify)
 pnpm knip                 # find unused files, exports and dependencies
 
@@ -500,13 +573,13 @@ pnpm clean                # remove build output
 
 This is the first public release of software that grew inside one company's deployment. Some things were defined only in that deployment and are not part of this repository yet.
 
-- **Migration history.** The repo ships `schema.prisma` but no migrations. `pnpm db:migrate --name init` creates the first migration from the schema. For a production database, review and commit that migration, then apply with `prisma migrate deploy`.
+- **Migration history.** The repo ships `schema.prisma` but no migrations. `pnpm db:migrate --name init` creates the first migration from the schema. For a production database, review it and keep it (the migrations folder is gitignored, so back it up or remove the ignore rule in your fork), then apply with `prisma migrate deploy`. When a later version changes `schema.prisma`, `pnpm quickstart` and the Docker `db-setup` step only apply the migrations you already have, so create one for the change yourself: `pnpm db:migrate --name <change>` (it writes the migration into `packages/database/prisma/migrations` and applies it; Docker picks up the same folder on the next `up`).
 - **SQL-only database features.** Add them in a follow-up migration (`prisma migrate dev --create-only`, then edit the SQL):
   - triggers that protect the root organization and keep `SUPER_ADMIN` users inside it (the API enforces both rules too),
   - the partial unique index that allows one running timer per user,
   - the full-text search indexes (search works without them, just slower on large data; the trigram indexes are in `schema.prisma` and need `pg_trgm`),
   - the default payment-source rows (the API creates them on first use).
-- **CI/CD.** No pipeline ships here. A good start is a workflow that runs `pnpm install --frozen-lockfile` then `pnpm verify` on each pull request, and a deploy job that builds, runs `prisma migrate deploy` and restarts the `api` and `worker` processes. Also run `gitleaks detect` to catch secrets.
+- **Deployment pipeline.** `.github/workflows/ci.yml` checks every pull request (`pnpm format:check`, `pnpm verify` and a Docker smoke test), but no deploy job ships here. A deploy job typically builds, runs `prisma migrate deploy` and restarts the `api` and `worker` processes. Also run `gitleaks detect` to catch secrets.
 - **Published images, Helm chart and setup screen** (see Planned above).
 
 ## 12. Security model
@@ -517,13 +590,14 @@ This is the first public release of software that grew inside one company's depl
 - **Audit log and platform log.** Each organization can read its own audit log, including support actions. Platform-level events go to a separate platform log.
 - **Security alerts.** Bursts of failed sign-ins, mass deletes and very large imports or exports raise alerts in the affected organization's audit log and the platform log. Alerts carry counts and ids only, never content.
 - **Permissions are enforced on the server** with NestJS guards and CASL. The frontend uses the same abilities only to hide what a user cannot do.
-- **Secrets and sessions.** Secrets come from the environment. Mail credentials are encrypted at rest with `MAIL_ENCRYPTION_KEY`. The Devices page lists every session and can sign any of them out.
+- **Secrets and sessions.** Secrets come from the environment. Mail credentials, organization mail settings and add-on secrets are encrypted at rest with `MAIL_ENCRYPTION_KEY`. The Devices page lists every session and can sign any of them out.
+- **Public forms.** Anonymous form endpoints have their own rate limits and a smaller request size limit, uploads go to object storage through short-lived signed URLs, and an optional Turnstile check stops bots.
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## 13. Known limitations
 
-- **UI wording.** Some UI strings still say "Botss" (for example on the sign-in pages, in the logo alt text and in some admin and mail settings messages).
+- **UI wording.** Some UI strings still say "Botss" (for example on the sign-in pages, in the logo alt text, in the footer of public forms and in some admin and mail settings messages).
 - **Package scope.** Packages use the `@botss/*` scope. Renaming is planned.
 - **Deep link scheme.** The desktop and mobile apps use the `botss://` scheme (`apps/desktop/src/main.ts`, `apps/mobile/app.json`).
 - **Internal root organization id.** The root platform organization id is the constant `ROOT_ORG_ID` (`org_root_thebotss`) in `apps/api/src/organizations/organizations.constants.ts` and the seed. It is an internal identifier only and is not shown to users.
@@ -532,6 +606,6 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## 14. Contributing, security reporting and license
 
-- Contributing: see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Run `pnpm verify` before opening a pull request.
+- Contributing: see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Run `pnpm verify` and `pnpm format:check` before opening a pull request.
 - Security: report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). Do not open public issues for them.
 - License: [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).

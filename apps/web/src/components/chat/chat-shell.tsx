@@ -1,6 +1,6 @@
 'use client';
 
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useMemo, useState, type ReactNode } from 'react';
 import type { CreateChatRoomInput } from '@botss/shared-types';
 
@@ -29,6 +29,7 @@ interface Props {
 export function ChatShell({ children }: Props) {
   const session = useSessionContext();
   const userId = session.data?.user?.id ?? '';
+  const router = useRouter();
 
   const { data, isLoading, isError, refetch } = useChatRooms();
   const create = useCreateChatRoom();
@@ -47,7 +48,7 @@ export function ChatShell({ children }: Props) {
       return; // toasted by useCreateChatRoom's onError; keep the dialog open
     }
     setNewChatOpen(false);
-    window.location.href = `/chat/${created.id}`;
+    router.push(`/chat/${created.id}`);
   }
 
   function onStartCall(roomId: string): void {

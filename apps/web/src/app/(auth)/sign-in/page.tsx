@@ -1,5 +1,6 @@
 'use client';
 
+import type { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -29,7 +30,7 @@ function SignInForm() {
     handleSubmit,
     setValue,
     formState: { errors, isSubmitting },
-  } = useForm<SignInInput>({
+  } = useForm<z.input<typeof signInSchema>, unknown, SignInInput>({
     resolver: zodResolver(signInSchema),
     defaultValues: { rememberMe: true },
   });
@@ -44,7 +45,12 @@ function SignInForm() {
     if (email || password) {
       if (email) setValue('email', email);
       if (password) setValue('password', password);
-      window.history.replaceState(null, '', '/sign-in');
+      // Drop only the credentials; keep `next` and anything else.
+      const params = new URLSearchParams(window.location.search);
+      params.delete('email');
+      params.delete('password');
+      const query = params.toString();
+      window.history.replaceState(null, '', query ? `/sign-in?${query}` : '/sign-in');
     }
   }, [searchParams, setValue]);
 
@@ -73,7 +79,7 @@ function SignInForm() {
         return;
       }
 
-      window.location.replace(await landingPathAfterSignIn());
+      window.location.replace(await landingPathAfterSignIn(searchParams.get('next')));
     } catch (err) {
       // Inline under the form (the established sign-in UX). Network failures
       // read as "Couldn't reach the server..." instead of a generic message.

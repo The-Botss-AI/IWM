@@ -17,7 +17,11 @@ import * as Sharing from 'expo-sharing';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView, type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
 
-import { ensureAndroidChannels, registerForPushTokenAsync } from '../lib/push';
+import {
+  ensureAndroidChannels,
+  ensureNotificationCategories,
+  registerForPushTokenAsync,
+} from '../lib/push';
 
 /**
  * The mobile app is a thin native shell: a full-screen WebView pointed at the
@@ -69,7 +73,7 @@ function isAppUrl(url: string): boolean {
 // Show banners even when the app is foregrounded (background/killed delivery is
 // handled by the OS). Module scope so it's set once before any notification.
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
+  handleNotification: async (notification) => ({
     // SDK 52 deprecated shouldShowAlert in favour of shouldShowBanner +
     // shouldShowList; set all three so the heads-up banner shows in the
     // foreground on both old and new expo-notifications behaviours (sound alone
@@ -77,7 +81,8 @@ Notifications.setNotificationHandler({
     shouldShowAlert: true,
     shouldShowBanner: true,
     shouldShowList: true,
-    shouldPlaySound: true,
+    // Silent calls (Do Not Disturb) never play a sound, even in the foreground.
+    shouldPlaySound: notification.request.content.data?.silent !== true,
     shouldSetBadge: false,
   }),
 });
@@ -115,6 +120,30 @@ function readResponse(
   };
 }
 
+/** The call a Decline tap refers to, or null when the tap is anything else. */
+function readDecline(
+  resp: Notifications.NotificationResponse | null | undefined,
+): { id: string; callId: string } | null {
+  if (!resp || resp.actionIdentifier !== 'decline') return null;
+  const callId = resp.notification.request.content.data?.callId;
+  if (typeof callId !== 'string' || !callId) return null;
+  return { id: resp.notification.request.identifier, callId };
+}
+
+/** Remove presented notifications for a call that is over. */
+async function dismissCallNotifications(callId: string): Promise<void> {
+  try {
+    const presented = await Notifications.getPresentedNotificationsAsync();
+    await Promise.all(
+      presented
+        .filter((n) => n.request.content.data?.callId === callId)
+        .map((n) => Notifications.dismissNotificationAsync(n.request.identifier)),
+    );
+  } catch {
+    /* best effort - the notification times out on its own */
+  }
+}
+
 /**
  * Strip anything that could escape the cache directory or upset the platform
  * file APIs. The name arrives from an email attachment, so it is attacker
@@ -137,6 +166,8 @@ export default function HomeScreen() {
   // A tap that arrives while the WebView is loading (or failed to load) is
   // parked here and flushed once a load succeeds.
   const pendingUrl = useRef<string | null>(null);
+  // Declines tapped while the WebView is not ready; sent once it is.
+  const pendingDeclines = useRef(new Set<string>());
   // Cold start and the response listener can both report the tap that
   // launched the app; remember which ones were handled.
   const handledTaps = useRef(new Set<string>());
@@ -227,11 +258,16 @@ export default function HomeScreen() {
       filename?: string;
       mimeType?: string;
       base64?: string;
+      callId?: string;
     };
     try {
       payload = JSON.parse(event.nativeEvent.data);
     } catch {
       return; // Not ours - the web app may post other things later.
+    }
+    if (payload.type === 'botss:call-ended') {
+      if (typeof payload.callId === 'string') void dismissCallNotifications(payload.callId);
+      return;
     }
     if (payload.type !== 'botss:save-file') return;
     if (!payload.base64) return;
@@ -286,9 +322,38 @@ export default function HomeScreen() {
     webRef.current?.reload();
   }, [clearRetry]);
 
+  // Hand a Decline to the web app, which emits `call_reject` on its socket
+  // (the shell has no session token). Never navigates to the call.
+  const declineCall = useCallback((callId: string) => {
+    const id = JSON.stringify(callId);
+    webRef.current?.injectJavaScript(
+      // Queued on window too: right after load the page may not have mounted
+      // its listener yet, and it drains the queue when it does.
+      `(function(){(window.__BOTSS_CALL_DECLINES__=window.__BOTSS_CALL_DECLINES__||[]).push(${id});` +
+        `window.dispatchEvent(new CustomEvent('botss:call-decline',{detail:{callId:${id}}}));})();true;`,
+    );
+  }, []);
+
+  // A Decline tap: send it now if the page is loaded, else hold it for onLoad.
+  // Either way the notification goes away.
+  const handleDecline = useCallback(
+    (callId: string) => {
+      if (webLoaded.current) {
+        declineCall(callId);
+      } else {
+        pendingDeclines.current.add(callId);
+        // Sitting on a failed load: try again now, the user is looking at it.
+        if (loadFailed.current) retryLoad();
+      }
+      void dismissCallNotifications(callId);
+    },
+    [declineCall, retryLoad],
+  );
+
   // Register for push once, set up Android channels, and wire tap handling.
   useEffect(() => {
     void ensureAndroidChannels();
+    void ensureNotificationCategories();
     void registerForPushTokenAsync().then((token) => {
       if (!token) return;
       pushToken.current = token;
@@ -305,6 +370,15 @@ export default function HomeScreen() {
     };
     void Notifications.getLastNotificationResponseAsync()
       .then((resp) => {
+        // A Decline that launched the app: decline, but load the home page,
+        // not the call.
+        const decline = readDecline(resp);
+        if (decline) {
+          handledTaps.current.add(decline.id);
+          handleDecline(decline.callId);
+          start(null);
+          return;
+        }
         const tap = readResponse(resp);
         if (tap) handledTaps.current.add(tap.id);
         // The listener may have parked this same tap already; the first load
@@ -318,6 +392,14 @@ export default function HomeScreen() {
 
     // Tap while the app is running (foreground/background).
     const sub = Notifications.addNotificationResponseReceivedListener((resp) => {
+      const decline = readDecline(resp);
+      if (decline) {
+        if (handledTaps.current.has(decline.id)) return;
+        handledTaps.current.add(decline.id);
+        handleDecline(decline.callId);
+        return;
+      }
+      if (resp.actionIdentifier === 'decline') return;
       const tap = readResponse(resp);
       if (!tap || handledTaps.current.has(tap.id)) return;
       handledTaps.current.add(tap.id);
@@ -335,7 +417,7 @@ export default function HomeScreen() {
       clearTimeout(fallback);
       sub.remove();
     };
-  }, [navigateTo, retryLoad, sendPushToken]);
+  }, [handleDecline, navigateTo, retryLoad, sendPushToken]);
 
   // Coming back to the foreground on a failed load (e.g. the network was off
   // while backgrounded) retries straight away.
@@ -396,7 +478,9 @@ export default function HomeScreen() {
       navigateTo(pendingUrl.current);
       pendingUrl.current = null;
     }
-  }, [announceCapabilities, clearRetry, navigateTo, sendPushToken]);
+    for (const callId of pendingDeclines.current) declineCall(callId);
+    pendingDeclines.current.clear();
+  }, [announceCapabilities, clearRetry, declineCall, navigateTo, sendPushToken]);
 
   const onError = useCallback(() => {
     webLoaded.current = false;

@@ -4,7 +4,7 @@ import { cuid } from './common/id.js';
 import { CustomFieldScope, CustomFieldType } from './enums.js';
 
 /**
- * Custom field definition (Phase 2 Step F).
+ * Custom field definition.
  *
  * Scope-rules:
  *   - `scope === 'PROJECT'` → `projectId` may be present (single-project) or null

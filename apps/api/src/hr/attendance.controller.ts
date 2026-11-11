@@ -8,11 +8,13 @@ import {
   overrideAttendanceSchema,
 } from '@botss/shared-types';
 
+import { RequireAddon } from '../addons/require-addon.decorator';
 import { CurrentUser, type AuthedUser } from '../common/decorators/current-user.decorator';
 import { SkipPermissions } from '../common/decorators/skip-permissions.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { AttendanceService } from './attendance.service';
 
+@RequireAddon('hr')
 @Controller('attendance')
 export class AttendanceController {
   constructor(private readonly attendance: AttendanceService) {}

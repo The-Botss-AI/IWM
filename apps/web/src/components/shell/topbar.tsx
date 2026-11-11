@@ -5,6 +5,7 @@ import {
   CalendarDays,
   CheckSquare,
   ChevronDown,
+  ClipboardList,
   Clock,
   Download,
   FileText,
@@ -35,6 +36,7 @@ import { clearAllInAppNotifications } from '@/lib/in-app-notifications';
 import { useSessionContext } from '@/components/auth/session-gate';
 import { useCurrentWorkspace } from '@/hooks/use-workspace';
 import { useDesktopNotifications } from '@/hooks/use-desktop-notifications';
+import { useAddons } from '@/hooks/use-addons';
 import { useNavPrefs } from '@/hooks/use-nav-prefs';
 import { useActiveSupportSession } from '@/hooks/use-support-access';
 import { usePermissions } from '@/hooks/use-permissions';
@@ -70,6 +72,7 @@ export function TopBar() {
   // the assignment half, so the answer is fetched rather than derived here.
   const sales = useSalesAccess();
   const nav = useNavPrefs(user?.id ?? '');
+  const addons = useAddons();
   // A read only support session hides Mail and Chat (the API refuses both)
   // and never subscribes the operator's own account to notifications.
   const inSupport = useActiveSupportSession() !== null;
@@ -169,6 +172,13 @@ export function TopBar() {
       icon: FileText,
       prefkey: 'projects',
     },
+    {
+      key: 'forms',
+      href: '/form-builder',
+      label: 'Forms',
+      icon: ClipboardList,
+      prefkey: 'projects',
+    },
   ];
 
   // Leads and Clients are gated independently: a user can be assigned clients
@@ -177,6 +187,8 @@ export function TopBar() {
     leads: sales.leads,
     clients: sales.clients,
     financials: isAdmin || isFinance,
+    // Hidden while the organization has the Mail add-on switched off.
+    mail: addons.isOn('mail'),
     ...(inSupport ? { mail: false, chat: false } : {}),
   };
   const isAllowed = (i: NavItem): boolean =>
@@ -218,7 +230,8 @@ export function TopBar() {
         {isAdmin && nav.isVisible('admin') ? (
           <PillNavItem href="/admin" active={isActive('/admin')} label="Admin" icon={ShieldCheck} />
         ) : null}
-        {isHr ? (
+        {/* HR is the HR add-on's: hidden while it is switched off. */}
+        {isHr && addons.isOn('hr') ? (
           <PillNavItem
             href="/admin/attendance"
             active={isActive('/admin')}

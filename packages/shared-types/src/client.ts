@@ -28,7 +28,7 @@ export const clientSchema = z.object({
   taxId: z.string().nullable(),
   notes: z.string().nullable(),
   tags: z.array(z.string()),
-  customFields: z.record(z.unknown()).nullable(),
+  customFields: z.record(z.string(), z.unknown()).nullable(),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
   deletedAt: z.coerce.date().nullable(),

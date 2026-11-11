@@ -114,7 +114,7 @@ export class AuthGuard implements CanActivate {
       this.logger.error(`Auth context resolution failed: ${(err as Error).message}`);
       throw contextUnavailable();
     }
-    const userExtras = context.extras;
+    let userExtras = context.extras;
 
     // Offboarded users: the Better Auth session row survives a soft delete, so
     // the cookie alone is not proof the account is still allowed in.
@@ -160,6 +160,7 @@ export class AuthGuard implements CanActivate {
     }
 
     // Memberships and permissions were resolved together with the user above.
+    let bootstrapped = false;
     try {
       if (context.session.workspaceMemberships.length === 0) {
         // First authenticated request for this user - bootstrap a personal
@@ -167,12 +168,23 @@ export class AuthGuard implements CanActivate {
         // the new membership.
         await this.authService.ensureBootstrapWorkspace(req.user.id, req.user.name, req.user.email);
         context = await this.authService.resolveRequestContext(req.user.id, wsId, { fresh: true });
+        bootstrapped = true;
       }
     } catch (err) {
       // An org-less staff account is a definite answer, not an outage.
       if (err instanceof ForbiddenException) throw err;
       this.logger.error(`Workspace context resolution failed: ${(err as Error).message}`);
       throw contextUnavailable();
+    }
+    if (bootstrapped) {
+      // Bootstrap can place the user in an organization (auto-route on a
+      // verified domain), so the fresh read is the truth from here on: the
+      // same account and organization checks run again on it.
+      userExtras = context.extras;
+      if (userExtras.userDisabled) throw accountDisabled();
+      if (userExtras.orgInactive) throw organizationSuspended();
+      req.user.organizationId = userExtras.organizationId;
+      req.user.systemRole = userExtras.systemRole;
     }
     const sessionContext = context.session;
     this.logger.debug(

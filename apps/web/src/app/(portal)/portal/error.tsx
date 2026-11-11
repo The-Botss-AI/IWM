@@ -20,7 +20,7 @@ export default function PortalError({
   reset: () => void;
 }) {
   useEffect(() => {
-    reportClientError(error, { boundary: 'portal', digest: error.digest });
+    void reportClientError(error, { boundary: 'portal', digest: error.digest });
   }, [error]);
 
   return (

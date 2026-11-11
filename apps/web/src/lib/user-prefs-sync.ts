@@ -45,19 +45,29 @@ export function hiddenChangeToPatch(hidden: string[]): UserPreferences {
   return { navigation: { hidden: valid.slice(0, MAX_HIDDEN_NAV_IDS) } };
 }
 
+/** Do Not Disturb change as a patch. */
+export function dndChangeToPatch(doNotDisturb: boolean): UserPreferences {
+  return { notifications: { doNotDisturb } };
+}
+
 /** Combine two pending patches; later keys win, sections merge, arrays replace. */
 export function mergePatches(a: UserPreferences | null, b: UserPreferences): UserPreferences {
   if (!a) return b;
   const out: UserPreferences = {};
   if (a.appearance || b.appearance) out.appearance = { ...a.appearance, ...b.appearance };
   if (a.navigation || b.navigation) out.navigation = { ...a.navigation, ...b.navigation };
+  if (a.notifications || b.notifications) {
+    out.notifications = { ...a.notifications, ...b.notifications };
+  }
   return out;
 }
 
 export function isEmptyPatch(p: UserPreferences | null): boolean {
   if (!p) return true;
   return (
-    Object.keys(p.appearance ?? {}).length === 0 && Object.keys(p.navigation ?? {}).length === 0
+    Object.keys(p.appearance ?? {}).length === 0 &&
+    Object.keys(p.navigation ?? {}).length === 0 &&
+    Object.keys(p.notifications ?? {}).length === 0
   );
 }
 

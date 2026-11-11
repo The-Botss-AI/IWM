@@ -239,16 +239,6 @@ function csvChecks(): void {
 }
 
 async function payslipChecks(): Promise<void> {
-  // The root organization's signatory comes from the environment; unset means none.
-  delete process.env.PAYSLIP_SIGNATORY_NAME;
-  delete process.env.PAYSLIP_SIGNATORY_TITLE;
-  assert.equal(
-    payslipExtras(ROOT_ORG_ID).signatory,
-    null,
-    'no signatory when PAYSLIP_SIGNATORY_NAME is unset',
-  );
-  process.env.PAYSLIP_SIGNATORY_NAME = 'Jane Doe';
-  process.env.PAYSLIP_SIGNATORY_TITLE = 'CEO';
   const dir = path.resolve(__dirname, '..', '..', 'payslip-templates', 'default');
   const source = await fs.readFile(path.join(dir, 'template.html'), 'utf8');
   const template = compileTemplate(source, TEMPLATE_HELPERS);
@@ -287,7 +277,10 @@ async function payslipChecks(): Promise<void> {
     },
     new Date('2026-09-30T00:00:00Z'),
   );
-  const own = payslipExtras(ROOT_ORG_ID);
+  // The signatory is the organization's HR add-on setting (the platform org
+  // falls back to PAYSLIP_SIGNATORY_NAME / _TITLE); here it is passed in.
+  const SIGNATORY = { name: 'Jane Doe', title: 'CEO' };
+  const own = payslipExtras(ROOT_ORG_ID, SIGNATORY);
   const html = template.render({
     ...vm,
     assets: { logo: true, stamp: true },
@@ -356,9 +349,9 @@ async function payslipChecks(): Promise<void> {
   assert.ok(cash.includes('Cash'), 'payment method shown');
   // Any other organization (anyone can sign up) never gets the operator's
   // signature, stamp or logo.
-  const other = payslipExtras('org_someone_else');
+  const other = payslipExtras('org_someone_else', null);
   assert.equal(other.own, false);
-  assert.equal(other.signatory, null, 'no signatory for another organization');
+  assert.equal(other.signatory, null, 'no signatory for another organization without its own');
   assert.equal(own.own, true);
   assert.ok(
     !cash.includes('asset-stamp') && !cash.includes('Jane Doe'),
@@ -368,11 +361,19 @@ async function payslipChecks(): Promise<void> {
   // The gate itself, through the real document renderer (it reads the
   // template folder's logo.png and stamp.png).
   const renderer = new PayslipRenderService({} as InvoiceRenderService);
-  const ours = await renderer.renderDocument([vm], ROOT_ORG_ID);
+  const ours = await renderer.renderDocument([vm], ROOT_ORG_ID, SIGNATORY);
   for (const expected of ['data:image/png;base64,', 'class="stamp asset-stamp"', 'Jane Doe']) {
     assert.ok(ours.includes(expected), `the root organization's payslip has ${expected}`);
   }
   const theirs = await renderer.renderDocument([vm], 'org_someone_else');
+  // Another organization with its own signatory prints its own name, never
+  // the platform's logo or stamp.
+  const theirsSigned = await renderer.renderDocument([vm], 'org_someone_else', {
+    name: 'Their Director',
+    title: 'Director',
+  });
+  assert.ok(theirsSigned.includes('Their Director'), 'own signatory printed');
+  assert.ok(!theirsSigned.includes('class="stamp asset-stamp"'), 'never the platform stamp');
   for (const forbidden of [
     'data:image/png',
     'class="stamp asset-stamp"',

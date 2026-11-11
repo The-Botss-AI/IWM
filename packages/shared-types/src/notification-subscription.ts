@@ -91,7 +91,9 @@ export const desktopPushPayloadSchema = z.object({
   /// Notification.tag - collapses repeated banners on the same target.
   tag: z.string().max(120).optional(),
   /// Free-form structured metadata the SW can forward back via postMessage.
-  data: z.record(z.unknown()).optional(),
+  data: z.record(z.string(), z.unknown()).optional(),
+  /// Do Not Disturb call: show the banner with no sound, vibration or ring.
+  silent: z.boolean().optional(),
 });
 export type DesktopPushPayload = z.infer<typeof desktopPushPayloadSchema>;
 

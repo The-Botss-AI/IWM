@@ -1,9 +1,9 @@
 import { BadRequestException, Logger, type PipeTransform } from '@nestjs/common';
-import type { ZodError, ZodTypeAny, z } from 'zod';
+import type { ZodError, ZodType, z } from 'zod';
 
 import { humanizeField } from '../humanize-field';
 
-export class ZodValidationPipe<S extends ZodTypeAny> implements PipeTransform<unknown, z.infer<S>> {
+export class ZodValidationPipe<S extends ZodType> implements PipeTransform<unknown, z.infer<S>> {
   private static readonly logger = new Logger('ZodValidationPipe');
 
   constructor(private readonly schema: S) {}

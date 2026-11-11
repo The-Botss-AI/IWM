@@ -1,8 +1,10 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 
+import { AddonsService } from '../addons/addons.service';
+import type { PayslipSignatory } from '../addons/hr-config';
 import { InvoiceRenderService, type InvoiceViewModel } from '../invoices/invoice-render.service';
 import { TEMPLATE_HELPERS } from '../invoices/invoice-templates.service';
 import { ROOT_ORG_ID } from '../organizations/organizations.constants';
@@ -90,32 +92,31 @@ export const PAYSLIP_PAPER = 'A4' as const;
 /** No page margins: the colour bars run to the paper edge; styles.css pads the content. */
 export const PAYSLIP_MARGINS_MM = { top: 0, right: 0, bottom: 0, left: 0 };
 
-/** Optional images in the template folder (the operator's logo and signed stamp). */
+/** Optional images in the template folder (the platform's logo and signed stamp). */
 const ASSET_FILES = { logo: 'logo.png', stamp: 'stamp.png' } as const;
 type Assets = Partial<Record<keyof typeof ASSET_FILES, string>>;
 /** An image larger than this is skipped: it would bloat every PDF. */
 const MAX_ASSET_BYTES = 1_000_000;
 
 /**
- * Who signs the platform operator's own payslips, from PAYSLIP_SIGNATORY_NAME
- * and PAYSLIP_SIGNATORY_TITLE. Unset name = no signatory block. The template
- * folder's logo, the signed stamp and this name belong to the operator and
- * appear only on the root organization's payslips: any organization can sign
- * up to the platform and must never be able to print the operator's signature.
+ * What a payslip may carry beyond the organization's own branding.
+ *
+ * The logo and signed stamp in the template folder belong to the platform
+ * (root) organization and appear only on its payslips: any organization can
+ * sign up, and must never be able to print the platform's stamp.
+ *
+ * The signatory comes from the organization's HR add-on settings (the
+ * platform organization falls back to PAYSLIP_SIGNATORY_NAME / _TITLE while
+ * it has none, see `addons/hr-config.ts`); null prints no signature block.
  */
-function rootSignatory(): { name: string; title: string } | null {
-  const name = process.env.PAYSLIP_SIGNATORY_NAME?.trim();
-  if (!name) return null;
-  return { name, title: process.env.PAYSLIP_SIGNATORY_TITLE?.trim() ?? '' };
-}
-
-/** What a payslip may carry beyond the organization's own branding. */
-export function payslipExtras(organizationId: string): {
+export function payslipExtras(
+  organizationId: string,
+  signatory: PayslipSignatory | null,
+): {
   own: boolean;
-  signatory: { name: string; title: string } | null;
+  signatory: PayslipSignatory | null;
 } {
-  const own = organizationId === ROOT_ORG_ID;
-  return { own, signatory: own ? rootSignatory() : null };
+  return { own: organizationId === ROOT_ORG_ID, signatory };
 }
 
 /**
@@ -135,7 +136,17 @@ export class PayslipRenderService {
   private cache: { stamp: string; compiled: CompiledTemplate; css: string; assets: Assets } | null =
     null;
 
-  constructor(private readonly invoiceRender: InvoiceRenderService) {}
+  constructor(
+    private readonly invoiceRender: InvoiceRenderService,
+    // Optional: without it (tests) no payslip has a signatory.
+    @Optional() private readonly addons?: AddonsService,
+  ) {}
+
+  /** Who signs this organization's payslips (HR add-on settings). */
+  async signatoryFor(organizationId: string): Promise<PayslipSignatory | null> {
+    if (!this.addons) return null;
+    return (await this.addons.hrConfig(organizationId)).signatory;
+  }
 
   /**
    * View models for these items of one run, sharing one branding lookup.
@@ -164,9 +175,15 @@ export class PayslipRenderService {
    * stylesheet once (classes `asset-logo`, `asset-stamp`), not into every
    * page; the template only learns whether each one is available.
    */
-  async renderDocument(models: PayslipViewModel[], organizationId: string): Promise<string> {
+  async renderDocument(
+    models: PayslipViewModel[],
+    organizationId: string,
+    signatoryOverride?: PayslipSignatory | null,
+  ): Promise<string> {
     const { compiled, css, assets } = await this.load();
-    const { own, signatory } = payslipExtras(organizationId);
+    const resolved =
+      signatoryOverride !== undefined ? signatoryOverride : await this.signatoryFor(organizationId);
+    const { own, signatory } = payslipExtras(organizationId, resolved);
     const shown: Assets = own ? assets : {};
     const flags = { logo: !!shown.logo, stamp: !!shown.stamp };
     const assetCss = (Object.entries(shown) as [keyof Assets, string][])

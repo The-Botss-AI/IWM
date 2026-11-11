@@ -18,7 +18,7 @@ export default function GlobalError({
   reset: () => void;
 }) {
   useEffect(() => {
-    reportClientError(error, { boundary: 'global', digest: error.digest });
+    void reportClientError(error, { boundary: 'global', digest: error.digest });
   }, [error]);
 
   return (

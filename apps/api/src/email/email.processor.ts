@@ -18,6 +18,7 @@ import {
   renderInvoiceEmail,
   renderResetPasswordEmail,
   renderSignatureCompletedEmail,
+  renderFormSubmissionEmail,
   renderSignatureDeclinedEmail,
   renderSignatureRequestEmail,
 } from './mail.sender';
@@ -125,11 +126,11 @@ export class EmailProcessor extends WorkerHost {
         }
       }
 
-      // Dedicated MailAccount (e.g. the MAIL_FROM no-reply address imported into the app).
+      // Dedicated MailAccount (the MAIL_FROM address imported into the CRM).
       // Uses the CRM's MailSendService outbox pipeline to send raw RFC 822 MIME
       // and append a copy to the IMAP Sent folder, exactly like user webmail!
       if (this.mailSend) {
-        const fromHeader = this.sender.getFromAddress() || 'no-reply@localhost';
+        const fromHeader = this.sender.getFromAddress();
         const bareEmail = (fromHeader.match(/<([^>]+)>/)?.[1] ?? fromHeader).trim();
         const mailAccount = await this.prisma.client.mailAccount.findFirst({
           where: {
@@ -242,6 +243,12 @@ function render(data: EmailJobData): { subject: string; html: string; text: stri
         inviterName: data.inviterName,
         url: data.url,
         expiresAtLabel: data.expiresAtLabel,
+      });
+    case 'form-submission':
+      return renderFormSubmissionEmail({
+        formTitle: data.formTitle,
+        submittedBy: data.submittedBy,
+        url: data.url,
       });
     case 'signature-declined':
       return renderSignatureDeclinedEmail({
