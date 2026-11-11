@@ -22,6 +22,28 @@ import { isDesktop } from '@/lib/desktop-runtime';
  * Failure modes are intentionally swallowed (with a console.warn) so
  * a push misconfiguration never breaks the app shell.
  */
+/**
+ * Sign-out teardown for Web Push: remove this browser's subscription on the
+ * server (while the session still exists) and in the browser. Without it the
+ * signed-out user's subscription stays registered, so on a shared computer
+ * their chat previews and call banners keep arriving for the next person.
+ * Best-effort: never blocks signing out.
+ */
+export async function unsubscribeWebPush(): Promise<void> {
+  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+  try {
+    const registration = await navigator.serviceWorker.getRegistration('/sw.js');
+    const subscription = await registration?.pushManager.getSubscription();
+    if (!subscription) return;
+    await getApi()
+      .notifications.unsubscribePush(subscription.endpoint)
+      .catch(() => undefined);
+    await subscription.unsubscribe();
+  } catch {
+    // No service worker, no permission, or the browser refused: nothing to undo.
+  }
+}
+
 export function useDesktopNotifications(userId: string | null): void {
   const subscribedKey = useRef<string | null>(null);
 

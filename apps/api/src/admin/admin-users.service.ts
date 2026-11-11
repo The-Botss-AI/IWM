@@ -14,9 +14,14 @@ import type {
   WebmailCandidate,
 } from '@botss/shared-types';
 
-import { assertMayAdministerUser, assertSameOrg } from './admin-user-policy';
+import {
+  assertMayAdministerUser,
+  assertMayGrantWorkspaceRole,
+  assertSameOrg,
+} from './admin-user-policy';
 import { SessionsService } from '../sessions/sessions.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { handOverSoleAdminRooms } from '../chat/room-admins';
 import { SecurityAlertsService } from '../security-alerts/security-alerts.service';
 import { CpanelService } from '../cpanel/cpanel.service';
 import { ROOT_ORG_ID } from '../organizations/organizations.constants';
@@ -251,6 +256,12 @@ export class AdminUsersService {
           'HR may create Employee, Project manager, or HR accounts. Admin and Super admin accounts need an admin to create them.',
       });
     }
+    // The same limit for the workspace role (an OWNER / ADMIN membership is
+    // `manage all` in that workspace).
+    assertMayGrantWorkspaceRole(
+      input.workspaceRole,
+      await userHasCompanyPermission(actingUserId, 'users.manage'),
+    );
     const targetOrgId = actor?.organizationId ?? null;
     if (!targetOrgId) {
       throw new ForbiddenException({
@@ -814,6 +825,10 @@ export class AdminUsersService {
       // mid-transaction read might still see the rows.
       await tx.session.deleteMany({ where: { userId: targetUserId } });
       await tx.account.deleteMany({ where: { userId: targetUserId } });
+
+      // Chat rooms where they are the only admin get a successor first, or
+      // the participant cascade would leave them with none.
+      await handOverSoleAdminRooms(tx, targetUserId);
 
       // The actual hard delete. All Cascade-FK dependents disappear as
       // a side effect; transferred references survive under the acting

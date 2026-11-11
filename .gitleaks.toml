@@ -5,3 +5,16 @@
 # and fill in your own project's values locally or in your EAS build secrets.
 [extend]
 useDefault = true
+
+# Known false positives, matched exactly so a real secret is still caught:
+# - the documented placeholder in .env.example, which the API's preflight and
+#   `pnpm quickstart` compare against (it never works as a secret);
+# - a test label in check-signatures.ts that the generic-api-key rule reads
+#   as a token ("token: legacy/short shape refused").
+[[allowlists]]
+description = "Placeholders and test labels, not secrets"
+regexTarget = "secret"
+regexes = [
+  '''^replace-me-with-32-byte-hex-secret$''',
+  '''^legacy/short$''',
+]

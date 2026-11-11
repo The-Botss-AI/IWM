@@ -355,7 +355,8 @@ function fakePrisma(opts: Opts = {}) {
       },
     },
     chatRoomParticipant: {
-      findMany: async () => [], // legacy room: every member counts as admin
+      // Legacy room: no ADMIN rows, so its members (USER_A) count as admins.
+      findMany: async () => [{ userId: USER_A, role: 'MEMBER' }],
       findFirst: async (args: { where: Where }) => {
         log('chatRoomParticipant.findFirst', args.where);
         return opts.chatMember ? { id: 'p-target' } : null;
@@ -394,6 +395,8 @@ function fakePrisma(opts: Opts = {}) {
       create: write('clientContact.create'),
     },
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(client),
+    // Row locks (e.g. the chat room lock) have nothing to do here.
+    $queryRaw: async () => [],
   };
   const raw = {
     ...client,

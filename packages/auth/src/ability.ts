@@ -353,6 +353,20 @@ export function defineAbilityFor(ctx: AbilityContext): AppAbility {
     if (wsp('sales.clients.delete')) ec('delete', 'Client');
   }
 
+  // ─── HR subjects (Attendance / Leave) ────────────────────────────────────
+  // Org-level, like money: only the HR permissions grant them. Layer 1's
+  // `read all` (every workspace MEMBER) and `manage all` (every workspace
+  // OWNER / ADMIN) would otherwise cover every person's attendance and leave
+  // in the organization. Everyone keeps their own rows from Layer 0.
+  if (!co('hr.attendance')) {
+    enc('manage', 'Attendance');
+    ec('read', 'Attendance', { userId: ctx.userId });
+  }
+  if (!co('hr.leave.approve')) {
+    enc('manage', 'Leave');
+    ec(['create', 'read'], 'Leave', { userId: ctx.userId });
+  }
+
   // ─── Layer 5: financial subjects ─────────────────────────────────────────
   // LOAD-BEARING. This must stay LAST, because CASL evaluates rules in order
   // and the last matching rule wins.

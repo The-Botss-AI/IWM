@@ -3,7 +3,7 @@ import { createParamDecorator, type ExecutionContext, ForbiddenException } from 
 import { isFullWorkspaceAdmin } from '@botss/auth';
 
 import type { RequestExtensions } from '../guards/auth.guard';
-import { requestPermissions } from '../permissions/effective-permissions';
+import { adminCheckedRole, requestPermissions } from '../permissions/effective-permissions';
 
 /**
  * Per-request access scope, **constrained to the currently active workspace**.
@@ -30,7 +30,11 @@ export interface UserScope {
   projectIds: string[];
   /** The active workspace id resolved from the `x-workspace-id` header. */
   currentWorkspaceId: string | null;
-  /** The caller's role in the ACTIVE workspace, or null if not a member. */
+  /**
+   * The caller's role in the ACTIVE workspace, or null if not a member.
+   * OWNER / ADMIN only while they hold every workspace permission; a base
+   * admin role under a narrower custom role reads as MEMBER.
+   */
   workspaceRole: string | null;
   /**
    * True when the caller bypasses `Project.visibility` and reads every project
@@ -90,7 +94,10 @@ export const RequestUserScope = createParamDecorator(
       workspaceIds,
       projectIds,
       currentWorkspaceId,
-      workspaceRole,
+      // OWNER / ADMIN only while they hold every workspace permission, so a
+      // narrower custom role or a denying override is not overruled by the
+      // base role still stored underneath it (see adminCheckedRole).
+      workspaceRole: adminCheckedRole(workspaceRole, eff),
       seesEveryProject,
     };
   },

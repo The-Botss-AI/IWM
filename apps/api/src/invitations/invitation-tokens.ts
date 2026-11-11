@@ -1,4 +1,4 @@
-import { newAccessCode, newLinkToken } from '../common/access-code';
+import { newAccessCode, newLinkToken, storedLinkTokenValue } from '../common/access-code';
 import type { PrismaService } from '../prisma/prisma.service';
 
 export const INVITATION_TTL_DAYS = 7;
@@ -29,7 +29,8 @@ export function parseInvitationIdentifier(
  * stop working. Shared by workspace invites and the org-owner bootstrap, which
  * use the same `workspace-invite:` identifier.
  *
- * The code is stored only as a hash. Never log the URL or the code.
+ * The link token and the code are stored only as hashes. Never log the URL
+ * or the code.
  */
 export async function issueWorkspaceInvitation(
   prisma: PrismaService,
@@ -44,7 +45,12 @@ export async function issueWorkspaceInvitation(
   await prisma.client.$transaction([
     prisma.client.verificationToken.deleteMany({ where: { identifier } }),
     prisma.client.verificationToken.create({
-      data: { identifier, value: token.raw, codeHash: code.hash, expiresAt },
+      data: {
+        identifier,
+        value: storedLinkTokenValue(token.raw),
+        codeHash: code.hash,
+        expiresAt,
+      },
     }),
   ]);
 

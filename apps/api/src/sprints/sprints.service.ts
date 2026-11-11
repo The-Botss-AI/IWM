@@ -13,7 +13,10 @@ import {
   type UpdateSprintInput,
 } from '@botss/shared-types';
 
+import type { AppAbility } from '@botss/auth';
+
 import type { UserScope } from '../common/decorators/user-scope.decorator';
+import { assertCanUpdateProject } from '../common/permissions/request-ability';
 import { densePositions, insertAt, rewritePositions } from '../common/positions';
 import { projectAccessWhere } from '../common/project-access';
 import { MilestoneDeliveryService } from '../finance/milestone-delivery.service';
@@ -75,8 +78,9 @@ export class SprintsService {
     }));
   }
 
-  async create(scope: UserScope, projectId: string, input: CreateSprintInput) {
+  async create(scope: UserScope, ability: AppAbility, projectId: string, input: CreateSprintInput) {
     await this.assertProjectAccess(scope, projectId);
+    assertCanUpdateProject(ability, projectId);
     assertSprintDates(input.startDate, input.endDate);
     const last = await this.prisma.client.sprint.findFirst({
       where: { projectId },
@@ -95,8 +99,8 @@ export class SprintsService {
     });
   }
 
-  async update(scope: UserScope, sprintId: string, input: UpdateSprintInput) {
-    const sprint = await this.requireSprint(scope, sprintId);
+  async update(scope: UserScope, ability: AppAbility, sprintId: string, input: UpdateSprintInput) {
+    const sprint = await this.requireSprint(scope, ability, sprintId);
     // A partial edit may move one end only: check it against the stored other.
     assertSprintDates(input.startDate ?? sprint.startDate, input.endDate ?? sprint.endDate);
     return this.prisma.client.sprint.update({
@@ -105,14 +109,14 @@ export class SprintsService {
     });
   }
 
-  async remove(scope: UserScope, sprintId: string): Promise<void> {
-    await this.requireSprint(scope, sprintId);
+  async remove(scope: UserScope, ability: AppAbility, sprintId: string): Promise<void> {
+    await this.requireSprint(scope, ability, sprintId);
     await this.prisma.client.sprint.delete({ where: { id: sprintId } });
   }
 
   /** Move PLANNED → ACTIVE and bump member tasks from BACKLOG → TODO. */
-  async start(scope: UserScope, sprintId: string) {
-    const sprint = await this.requireSprint(scope, sprintId);
+  async start(scope: UserScope, ability: AppAbility, sprintId: string) {
+    const sprint = await this.requireSprint(scope, ability, sprintId);
     if (sprint.status !== 'PLANNED') {
       throw new BadRequestException({
         title: 'Already started',
@@ -142,8 +146,8 @@ export class SprintsService {
   }
 
   /** Move ACTIVE → COMPLETED and bounce incomplete tasks back to BACKLOG. */
-  async complete(scope: UserScope, sprintId: string) {
-    const sprint = await this.requireSprint(scope, sprintId);
+  async complete(scope: UserScope, ability: AppAbility, sprintId: string) {
+    const sprint = await this.requireSprint(scope, ability, sprintId);
     if (sprint.status !== 'ACTIVE') {
       throw new BadRequestException({
         title: 'Not active',
@@ -182,8 +186,14 @@ export class SprintsService {
     return result;
   }
 
-  async addTask(scope: UserScope, userId: string, sprintId: string, taskId: string) {
-    const sprint = await this.requireSprint(scope, sprintId);
+  async addTask(
+    scope: UserScope,
+    ability: AppAbility,
+    userId: string,
+    sprintId: string,
+    taskId: string,
+  ) {
+    const sprint = await this.requireSprint(scope, ability, sprintId);
     const task = await this.prisma.client.task.findFirst({
       where: { id: taskId, projectId: sprint.projectId },
       select: { id: true },
@@ -208,8 +218,8 @@ export class SprintsService {
     });
   }
 
-  async removeTask(scope: UserScope, sprintId: string, taskId: string) {
-    await this.requireSprint(scope, sprintId);
+  async removeTask(scope: UserScope, ability: AppAbility, sprintId: string, taskId: string) {
+    await this.requireSprint(scope, ability, sprintId);
     await this.prisma.client.sprintTask.deleteMany({
       where: { sprintId, taskId },
     });
@@ -222,10 +232,11 @@ export class SprintsService {
    */
   async reorderTask(
     scope: UserScope,
+    ability: AppAbility,
     sprintId: string,
     input: ReorderSprintTaskInput,
   ): Promise<void> {
-    const sprint = await this.requireSprint(scope, sprintId);
+    const sprint = await this.requireSprint(scope, ability, sprintId);
     if (sprint.status === 'COMPLETED') {
       throw new BadRequestException({
         title: 'Sprint is completed',
@@ -259,18 +270,18 @@ export class SprintsService {
    * via the original row). All positions in both sprints are renumbered so
    * gaps don't accumulate.
    */
-  async moveTask(scope: UserScope, input: MoveSprintTaskInput): Promise<void> {
+  async moveTask(scope: UserScope, ability: AppAbility, input: MoveSprintTaskInput): Promise<void> {
     if (input.fromSprintId === input.toSprintId) {
       if (input.position !== undefined) {
-        await this.reorderTask(scope, input.fromSprintId, {
+        await this.reorderTask(scope, ability, input.fromSprintId, {
           taskId: input.taskId,
           position: input.position,
         });
       }
       return;
     }
-    const fromSprint = await this.requireSprint(scope, input.fromSprintId);
-    const toSprint = await this.requireSprint(scope, input.toSprintId);
+    const fromSprint = await this.requireSprint(scope, ability, input.fromSprintId);
+    const toSprint = await this.requireSprint(scope, ability, input.toSprintId);
     if (fromSprint.projectId !== toSprint.projectId) {
       throw new BadRequestException({
         title: 'Cross-project move',
@@ -327,7 +338,8 @@ export class SprintsService {
     });
   }
 
-  private async requireSprint(scope: UserScope, sprintId: string) {
+  /** A sprint the caller may CHANGE: they can see its project and may update THAT project. */
+  private async requireSprint(scope: UserScope, ability: AppAbility, sprintId: string) {
     const sprint = await this.prisma.client.sprint.findUnique({
       where: { id: sprintId },
       include: { project: { select: { id: true, workspaceId: true } } },
@@ -336,6 +348,7 @@ export class SprintsService {
       throw new NotFoundException({ title: 'Sprint not found', status: 404 });
     }
     await this.assertProjectAccess(scope, sprint.projectId);
+    assertCanUpdateProject(ability, sprint.projectId);
     return sprint;
   }
 }

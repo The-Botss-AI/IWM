@@ -12,6 +12,7 @@ import { CurrentWorkspaceId } from '../common/decorators/current-workspace.decor
 import { RequireAbility } from '../common/decorators/required-ability.decorator';
 import { CurrentSalesActor, type SalesActor } from '../common/decorators/sales-actor.decorator';
 import type { RequestExtensions } from '../common/guards/auth.guard';
+import { requestRoleForAdminChecks } from '../common/permissions/effective-permissions';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { SignaturesService } from './signatures.service';
 
@@ -33,9 +34,8 @@ export class ClientSignaturesController {
     @Param('clientId', new ZodValidationPipe(cuid)) clientId: string,
     @Query(new ZodValidationPipe(clientHubPageQuerySchema)) query: ClientHubPageQuery,
   ): Promise<ClientSignatureList> {
-    const role = (req.workspaceMemberships ?? []).find((m) => m.workspaceId === workspaceId)?.role;
     return this.signatures.listForClient(
-      { userId: user.id, workspaceId, workspaceRole: role },
+      { userId: user.id, workspaceId, workspaceRole: requestRoleForAdminChecks(req, workspaceId) },
       clientViewer,
       clientId,
       query,

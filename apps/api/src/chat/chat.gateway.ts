@@ -49,6 +49,7 @@ import {
   isStringArray,
 } from '../redis/cross-process-bus.service';
 import { ChatService } from './chat.service';
+import { socketOriginGate } from './socket-origin';
 
 interface AuthedSocket extends Socket {
   data: { userId: string; sessionId: string; organizationId: string | null };
@@ -104,10 +105,11 @@ function parseOrThrow<S extends z.ZodTypeAny>(schema: S, payload: unknown): z.in
 }
 
 // Allowlist mirrors the REST CORS handling in main.ts. The Socket.IO adapter
-// is mounted separately from the Express middleware chain, so without this
-// the REST origin allowlist would not protect the WebSocket - any third-party
-// site could open an authenticated socket against /chat using the victim's
-// cookie. Computed at module load to match the REST behaviour (env read once).
+// is mounted separately from the Express middleware chain, so the REST origin
+// allowlist does not reach the socket server. Two gates use this set: `cors`
+// for long-polling responses and `allowRequest` (socket-origin.ts) for every
+// handshake, WebSocket included - CORS alone never applied to WebSockets.
+// Computed at module load to match the REST behaviour (env read once).
 const chatAllowedOrigins = new Set(
   (process.env.WEB_ORIGIN ?? 'http://localhost:3000')
     .split(',')
@@ -130,6 +132,9 @@ function chatCorsOrigin(origin: string | undefined, cb: CorsOriginCb): void {
 @WebSocketGateway({
   namespace: '/chat',
   cors: { origin: chatCorsOrigin, credentials: true },
+  // `cors` above only covers long-polling responses. This is the check that
+  // also refuses a cross-site WebSocket handshake; see socket-origin.ts.
+  allowRequest: socketOriginGate(chatAllowedOrigins),
 })
 export class ChatGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy

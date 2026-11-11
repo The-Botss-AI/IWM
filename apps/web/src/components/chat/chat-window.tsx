@@ -191,14 +191,14 @@ export function ChatWindow({
   const stickyBottomRef = useRef(true);
 
   // Am I a room admin? Used to gate "Delete for everyone" on others'
-  // messages and to silently allow legacy rooms (zero admins recorded) to
-  // function as if everyone is admin.
+  // messages and to let legacy rooms (zero admins recorded) work as if every
+  // participant is admin - participants only, as `assertRoomAdmin` does.
   const isRoomAdmin = useMemo(() => {
     // A DM with another organization: nobody moderates the other side.
     if (room.spansOrganizations) return false;
     const adminCount = room.participants.filter((p) => p.role === 'ADMIN').length;
-    if (adminCount === 0) return true;
-    return room.participants.find((p) => p.userId === currentUserId)?.role === 'ADMIN';
+    const me = room.participants.find((p) => p.userId === currentUserId);
+    return adminCount === 0 ? !!me : me?.role === 'ADMIN';
   }, [room.participants, room.spansOrganizations, currentUserId]);
 
   useEffect(() => {

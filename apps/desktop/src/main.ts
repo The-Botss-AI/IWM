@@ -62,6 +62,61 @@ function isAppOrigin(url: string | undefined): boolean {
   }
 }
 
+/**
+ * Schemes a link may hand to the operating system. Anything else (`file:`,
+ * `smb:`, `ms-msdt:`, custom protocol handlers) is a way for a page to make
+ * the OS open local files or launch other programs, so it is dropped.
+ */
+const EXTERNAL_PROTOCOLS = new Set(['https:', 'http:', 'mailto:', 'tel:']);
+
+function openExternalSafely(url: string): void {
+  let protocol: string;
+  try {
+    protocol = new URL(url).protocol;
+  } catch {
+    return;
+  }
+  if (EXTERNAL_PROTOCOLS.has(protocol)) void shell.openExternal(url);
+}
+
+/**
+ * Navigation rules for EVERY web contents, not only the main window: a child
+ * window the app opens (`window.open` to its own origin) inherits the preload
+ * and with it `window.botssDesktop`, so it must not be able to wander off to
+ * another site either. Redirects are held to the same rule as navigations,
+ * and `<webview>` is never allowed.
+ */
+app.on('web-contents-created', (_event, contents) => {
+  // target=_blank / window.open: keep app origin in-app, send the rest to the
+  // OS browser so external links don't spawn chromeless Electron windows.
+  contents.setWindowOpenHandler(({ url }) => {
+    if (isAppOrigin(url)) return { action: 'allow' };
+    openExternalSafely(url);
+    return { action: 'deny' };
+  });
+  // Full-page navigations to a foreign origin (e.g. an OAuth provider link the
+  // user clicked) open externally instead of replacing the app shell.
+  // Both handlers read the event's details object: the positional url and
+  // isMainFrame arguments are deprecated, and if they went away every
+  // navigation would read as off-origin.
+  contents.on('will-navigate', (details) => {
+    if (!isAppOrigin(details.url)) {
+      details.preventDefault();
+      openExternalSafely(details.url);
+    }
+  });
+  contents.on('will-redirect', (details) => {
+    if (isAppOrigin(details.url)) return;
+    details.preventDefault();
+    // A page redirecting off the app (a download, an outside sign-in or
+    // billing page) opens in the browser, as a link does in will-navigate.
+    // A frame's redirect is only stopped, so an embed cannot use a redirect
+    // to open a browser tab.
+    if (details.isMainFrame) openExternalSafely(details.url);
+  });
+  contents.on('will-attach-webview', (event) => event.preventDefault());
+});
+
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
@@ -245,8 +300,11 @@ function showWindow(): void {
 
 function handleDeepLink(rawUrl: string | undefined): void {
   if (!rawUrl || !rawUrl.startsWith(`${PROTOCOL}://`)) return;
+  // loadURL skips the will-navigate guard, so check the target here.
+  const target = deepLinkToAppUrl(rawUrl);
+  if (!isAppOrigin(target)) return;
   showWindow();
-  mainWindow?.loadURL(deepLinkToAppUrl(rawUrl));
+  mainWindow?.loadURL(target);
 }
 
 function createWindow(initialUrl: string = APP_URL): void {
@@ -262,6 +320,9 @@ function createWindow(initialUrl: string = APP_URL): void {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // Explicit, though Electron's default: the renderer runs in the OS
+      // sandbox and the preload only gets the contextBridge / ipcRenderer.
+      sandbox: true,
       spellcheck: true,
       // Let Chromium throttle timers/rAF while the window is hidden in the tray
       // (default, but explicit). The chat socket is event-driven, so server
@@ -270,24 +331,8 @@ function createWindow(initialUrl: string = APP_URL): void {
     },
   });
 
+  // Navigation guards live in the app-wide 'web-contents-created' handler.
   void mainWindow.loadURL(initialUrl);
-
-  // target=_blank / window.open: keep app origin in-app, send the rest to the
-  // OS browser so external links don't spawn chromeless Electron windows.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (isAppOrigin(url)) return { action: 'allow' };
-    void shell.openExternal(url);
-    return { action: 'deny' };
-  });
-
-  // Full-page navigations to a foreign origin (e.g. an OAuth provider link the
-  // user clicked) open externally instead of replacing the app shell.
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (!isAppOrigin(url)) {
-      event.preventDefault();
-      void shell.openExternal(url);
-    }
-  });
 
   // Close-to-tray: the window hides instead of quitting so notifications keep
   // firing. Real quit goes through the tray menu / before-quit.
@@ -388,8 +433,13 @@ if (!gotLock) {
     // window.botssDesktop.{get,set}AutoStart). The macOS-only `openAsHidden`
     // flag used to be passed here; it was a no-op on macOS 13+ and on
     // Windows/Linux, and Electron removed it, so it is no longer sent.
-    ipcMain.handle('botss:getAutoStart', () => app.getLoginItemSettings().openAtLogin);
-    ipcMain.handle('botss:setAutoStart', (_event, enabled: boolean) => {
+    // Like botss:notify, every handler answers only our own pages.
+    ipcMain.handle('botss:getAutoStart', (event) => {
+      if (!isAppOrigin(event.senderFrame?.url)) return false;
+      return app.getLoginItemSettings().openAtLogin;
+    });
+    ipcMain.handle('botss:setAutoStart', (event, enabled: boolean) => {
+      if (!isAppOrigin(event.senderFrame?.url)) return false;
       app.setLoginItemSettings({ openAtLogin: Boolean(enabled) });
       return true;
     });
@@ -400,7 +450,10 @@ if (!gotLock) {
     const sendPower = (state: 'battery' | 'ac' | 'suspend' | 'resume'): void => {
       mainWindow?.webContents.send('botss:powerState', state);
     };
-    ipcMain.handle('botss:getPowerState', () => (powerMonitor.onBatteryPower ? 'battery' : 'ac'));
+    ipcMain.handle('botss:getPowerState', (event) => {
+      if (!isAppOrigin(event.senderFrame?.url)) return 'ac';
+      return powerMonitor.onBatteryPower ? 'battery' : 'ac';
+    });
     powerMonitor.on('on-battery', () => sendPower('battery'));
     powerMonitor.on('on-ac', () => sendPower('ac'));
     powerMonitor.on('suspend', () => sendPower('suspend'));

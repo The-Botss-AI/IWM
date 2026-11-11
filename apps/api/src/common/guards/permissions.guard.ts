@@ -45,9 +45,19 @@ export class PermissionsGuard implements CanActivate {
       ctx.getHandler(),
       ctx.getClass(),
     ]);
-    // Without an explicit @RequireAbility, default-allow (AuthGuard already enforced login).
-    // Methods that mutate data MUST declare an ability.
-    if (!required) return true;
+    // Deny by default. Every route declares how it is authorized:
+    // `@RequireAbility`, `@SkipPermissions` (the service checks), `@Public` or
+    // `@PortalRoute`. A route that forgot all of them used to pass on login
+    // alone; it now fails closed, and `check-route-permissions.ts` fails the
+    // build before such a route ships.
+    if (!required) {
+      throw new ForbiddenException({
+        title: 'Forbidden',
+        status: 403,
+        detail: 'This route does not declare a permission.',
+        code: 'insufficient_permissions',
+      });
+    }
 
     const req = ctx.switchToHttp().getRequest<RequestExtensions>();
     if (!req.user) {

@@ -460,6 +460,25 @@ export class OrganizationsService {
         return claim?.id ?? null;
       },
     });
+    // This route is public. Answering "Email already in use" told anyone
+    // whether an address has an account; the answer is now the same `ok` the
+    // caller gets after a real signup, and nothing is created. A deleted
+    // account still holds its unique email, so it counts too: missing it let
+    // the create fail on the unique index and gave the address away. The
+    // extension accepts `includeDeleted`; Prisma's generated types don't.
+    const existing = await (
+      this.prisma.client.user as unknown as {
+        findUnique(args: unknown): Promise<{ id: string } | null>;
+      }
+    ).findUnique({
+      where: { email: input.email.trim().toLowerCase() },
+      select: { id: true },
+      includeDeleted: true,
+    });
+    if (existing) {
+      this.logger.log('[ORG_SELF_SIGNUP] skipped: the owner address already has an account');
+      return { ok: true };
+    }
     const slug = await this.allocateOrgSlug(input.organizationName);
     const created = await this.create({
       name: input.organizationName.trim(),
@@ -916,11 +935,16 @@ export class OrganizationsService {
    * workspace might already own that handle. Try the org slug first, then
    * append a short suffix; bail after a few attempts rather than looping
    * forever.
+   *
+   * Checked on the raw client, like allocateOrgSlug: a deleted workspace
+   * still holds its slug in the unique index. Through the soft-delete client
+   * it looked free, the create hit P2002, and public signup answered 409 only
+   * for addresses with no account, which told them apart.
    */
   private async allocateWorkspaceSlug(base: string): Promise<string> {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const candidate = attempt === 0 ? base : `${base}-${randomBytes(2).toString('hex')}`;
-      const clash = await this.prisma.client.workspace.findUnique({
+      const clash = await this.prisma.raw.workspace.findUnique({
         where: { slug: candidate },
         select: { id: true },
       });
@@ -965,6 +989,8 @@ export class OrganizationsService {
         where: { id: orgId },
         data,
       });
+      // Suspending is a sign-out too, exactly like archiving.
+      if (input.isActive === false) await this.signOutOrganization(orgId);
       await this.auditLog.emit({
         organizationId: orgId,
         actorUserId: actorUserId ?? null,
@@ -991,11 +1017,25 @@ export class OrganizationsService {
       where: { id: orgId },
       data: { deletedAt: new Date(), isActive: false },
     });
-    // Kill any live sessions so the tenant's users are signed out the
-    // moment the archive lands - without this they'd carry a valid cookie
-    // until natural expiry and the AuthGuard 401 only fires on their next
-    // request. Hard-deleting Session rows is safe; they're regenerated on
-    // sign-in after a future restore.
+    const usersBlocked = await this.signOutOrganization(orgId);
+    await this.auditLog.emit({
+      organizationId: orgId,
+      actorUserId: actorUserId ?? null,
+      action: 'org.archive',
+      target: `organization:${orgId}`,
+      metadata: { usersBlocked },
+    });
+    return { ok: true };
+  }
+
+  /**
+   * End every session of an organization that was just archived or
+   * suspended. Without this its people keep a valid cookie (and a live chat
+   * socket) until natural expiry; AuthGuard only refuses their next request.
+   * Hard-deleting Session rows is safe; they're regenerated on sign-in after
+   * a restore. Returns the number of staff accounts signed out.
+   */
+  private async signOutOrganization(orgId: string): Promise<number> {
     const users = await this.prisma.client.user.findMany({
       where: { organizationId: orgId },
       select: { id: true },
@@ -1007,7 +1047,7 @@ export class OrganizationsService {
       this.realtime?.publishSessionsRevoked(users.map((u) => u.id));
     }
     // Client-portal people carry no organizationId, so the sweep above misses
-    // them. The portal already hides an archived org's clients; also sign out
+    // them. The portal already hides an inactive org's clients; also sign out
     // those whose only access ran through this org. Their contacts stay, so a
     // restore brings them back too.
     const portalContacts = await this.prisma.client.clientContact.findMany({
@@ -1031,14 +1071,7 @@ export class OrganizationsService {
         this.realtime?.publishSessionsRevoked(onlyHere);
       }
     }
-    await this.auditLog.emit({
-      organizationId: orgId,
-      actorUserId: actorUserId ?? null,
-      action: 'org.archive',
-      target: `organization:${orgId}`,
-      metadata: { usersBlocked: users.length },
-    });
-    return { ok: true };
+    return users.length;
   }
 
   /** Reverse a soft-delete. Workspaces/users/data all reappear. Requires
