@@ -92,6 +92,9 @@ Notifications.setNotificationHandler({
 // back - DNS fails (net::ERR_NAME_NOT_RESOLVED) a second or two before it
 // would have succeeded.
 const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000];
+// After the schedule above runs out, keep retrying at this interval while the
+// error screen shows, so the app recovers once the network is back.
+const STEADY_RETRY_MS = 15000;
 
 /**
  * Resolve a notification's `url` to an absolute app URL, or null when it is
@@ -486,8 +489,7 @@ export default function HomeScreen() {
     webLoaded.current = false;
     loadFailed.current = true;
     clearRetry();
-    const delay = RETRY_DELAYS_MS[retryCount.current];
-    if (delay === undefined) return; // Out of auto-retries; the error screen has a button.
+    const delay = RETRY_DELAYS_MS[retryCount.current] ?? STEADY_RETRY_MS;
     retryCount.current += 1;
     retryTimer.current = setTimeout(retryLoad, delay);
   }, [clearRetry, retryLoad]);

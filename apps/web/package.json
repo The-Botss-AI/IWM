@@ -9,7 +9,7 @@
     "start": "next start -p 3000",
     "lint": "next lint --max-warnings=0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node scripts/check-toast-text.mjs && node scripts/check-safe-next-path.mjs",
+    "test": "node scripts/check-toast-text.mjs && node scripts/check-safe-next-path.mjs && node scripts/check-load-error.mjs",
     "clean": "rimraf .next .turbo *.tsbuildinfo || exit 0"
   },
   "dependencies": {
