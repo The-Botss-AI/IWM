@@ -1,6 +1,7 @@
 import { Body, Controller, Post } from '@nestjs/common';
 import { livekitTokenRequestSchema, type LivekitTokenRequest } from '@botss/shared-types';
 
+import { RequireAddon } from '../addons/require-addon.decorator';
 import { CurrentUser, type AuthedUser } from '../common/decorators/current-user.decorator';
 import { SkipPermissions } from '../common/decorators/skip-permissions.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
@@ -11,6 +12,7 @@ import { LivekitService } from './livekit.service';
  * because the room-membership check inside the service is the
  * authoritative gate (CASL doesn't model LiveKit rooms).
  */
+@RequireAddon('livekit')
 @Controller('livekit')
 export class LivekitController {
   constructor(private readonly livekit: LivekitService) {}

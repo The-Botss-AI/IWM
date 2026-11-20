@@ -91,7 +91,7 @@ const SOCKET_EMIT_TOPIC: BusTopic<SocketEmit> = {
   },
 };
 
-function parseOrThrow<S extends z.ZodTypeAny>(schema: S, payload: unknown): z.infer<S> {
+function parseOrThrow<S extends z.ZodType>(schema: S, payload: unknown): z.infer<S> {
   const parsed = schema.safeParse(payload);
   if (!parsed.success) {
     throw new WsException({
@@ -566,6 +566,8 @@ export class ChatGateway
       // call-log row into the room) used to run before any check, so anyone
       // could kill a call in a room they were never in.
       await this.chat.assertRoomMember(socket.data.userId, input.roomId);
+      // Calls switched off (livekit add-on): refuse before ending anything.
+      await this.chat.assertCallsEnabled(socket.data.userId, input.roomId);
       await this.chat.forceEndCallByRoom(input.roomId);
       const { call, receiverUserIds } = await this.chat.initiateCall(
         socket.data.userId,
@@ -623,6 +625,8 @@ export class ChatGateway
       this.server.to(callerSocketId).emit('call_accepted', payload);
     }
     socket.emit('call_connected', { callId: call.id, roomId });
+    // The user's other devices stop ringing and clear their notification.
+    socket.to(userRoom(socket.data.userId)).emit('call_handled', { callId: call.id, roomId });
     return { ok: true };
   }
 
@@ -634,6 +638,11 @@ export class ChatGateway
     const input: CallRejectInput = parseOrThrow(callRejectSchema, raw);
     const result = await this.chat.rejectCall(input.callId, socket.data.userId);
     const { callerId, roomId, callLog } = result;
+    if (roomId) {
+      socket
+        .to(userRoom(socket.data.userId))
+        .emit('call_handled', { callId: input.callId, roomId });
+    }
     if (callerId && roomId) {
       this.server.to(userRoom(callerId)).emit('call_rejected', {
         callId: input.callId,

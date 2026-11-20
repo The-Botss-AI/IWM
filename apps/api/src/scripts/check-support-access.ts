@@ -992,9 +992,19 @@ async function main(): Promise<void> {
         `${url} logged as refused`,
       );
     }
-    for (const prefix of ['/mail', '/chat', '/notifications', '/livekit', '/todos']) {
+    for (const prefix of ['/mail', '/chat', '/notifications', '/livekit', '/todos', '/meetings']) {
       assert.ok(SUPPORT_EXCLUDED_PREFIXES.includes(prefix), `${prefix} excluded`);
     }
+    assert.ok(isSupportExcludedPath('/api/v1/meetings/cmm1', 'api/v1'), 'meetings are private');
+    assert.equal(
+      supportAccessPath(`/api/v1/meetings/feed/${'a'.repeat(43)}.ics`),
+      '/api/v1/meetings/feed/:token',
+      'feed token never reaches the log',
+    );
+    assert.equal(
+      supportAccessPath(`/api/v1/public/meetings/rsvp/${'b'.repeat(43)}`),
+      '/api/v1/public/meetings/rsvp/:token',
+    );
     assert.ok(
       !isSupportExcludedPath('/api/v1/mailboxes', '/api/v1'),
       'a longer word is not a prefix match',

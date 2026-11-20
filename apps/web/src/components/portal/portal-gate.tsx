@@ -7,6 +7,7 @@ import { useEffect, type ReactNode } from 'react';
 import { PortalProvider } from '@/components/portal/portal-context';
 import { PortalLoadError, PortalNoAccess } from '@/components/portal/portal-states';
 import { PageLoader } from '@/components/ui/loader';
+import { PORTAL_MESSAGES } from '@/lib/loading-messages';
 import { portalErrorStatus, usePortalAccessWatch, usePortalMeQuery } from '@/hooks/use-portal';
 import { isAuthFailure, sessionQueryOptions } from '@/lib/session-query';
 
@@ -59,7 +60,7 @@ export function PortalGate({ children }: { children: ReactNode }) {
         />
       );
     }
-    return <PageLoader fullScreen label="Loading your portal" />;
+    return <PageLoader fullScreen label="Loading your portal" messages={PORTAL_MESSAGES} />;
   }
 
   if (!me.data) {
@@ -72,7 +73,7 @@ export function PortalGate({ children }: { children: ReactNode }) {
         />
       );
     }
-    return <PageLoader fullScreen label="Loading your portal" />;
+    return <PageLoader fullScreen label="Loading your portal" messages={PORTAL_MESSAGES} />;
   }
 
   if (me.data.clients.length === 0) return <PortalNoAccess fullScreen />;

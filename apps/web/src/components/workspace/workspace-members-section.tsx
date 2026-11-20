@@ -83,7 +83,7 @@ const ROLE_LABEL: Record<WorkspaceRole, string> = {
   VIEWER: 'Viewer',
   // Legacy rows only; no longer assignable (see ROLE_OPTIONS).
   CLIENT: 'Client (legacy)',
-  // Phase 4 - finer-grained roles introduced with the org-layer refactor.
+  // Finer-grained roles introduced with the organization layer.
   MANAGER: 'Manager',
   EDITOR: 'Editor',
 };

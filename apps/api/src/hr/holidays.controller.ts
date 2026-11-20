@@ -11,6 +11,7 @@ import {
   updateHolidaySchema,
 } from '@botss/shared-types';
 
+import { RequireAddon } from '../addons/require-addon.decorator';
 import { CurrentUser, type AuthedUser } from '../common/decorators/current-user.decorator';
 import { SkipPermissions } from '../common/decorators/skip-permissions.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
@@ -21,6 +22,7 @@ import { HolidaysService } from './holidays.service';
  * in the org (the attendance grid surfaces holidays for everyone);
  * create / update / delete are gated to ADMIN or HR.
  */
+@RequireAddon('hr')
 @Controller('holidays')
 export class HolidaysController {
   constructor(private readonly holidays: HolidaysService) {}

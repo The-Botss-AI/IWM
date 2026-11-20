@@ -13,7 +13,7 @@ import { userSummarySchema } from './user.js';
  */
 export const projectWorkflowSettingsSchema = z
   .object({
-    wipLimits: z.record(TaskStatus, z.number().int().positive()).optional(),
+    wipLimits: z.partialRecord(TaskStatus, z.number().int().positive()).optional(),
   })
   .strict();
 export type ProjectWorkflowSettings = z.infer<typeof projectWorkflowSettingsSchema>;
@@ -183,7 +183,7 @@ export const projectAbilityRuleSchema = z
   .object({
     action: z.union([ProjectAbilityAction, z.array(ProjectAbilityAction).min(1).max(4)]),
     subject: z.union([ProjectAbilitySubject, z.array(ProjectAbilitySubject).min(1).max(3)]),
-    conditions: z.record(z.unknown()).optional(),
+    conditions: z.record(z.string(), z.unknown()).optional(),
     fields: z.array(z.string().min(1).max(64)).max(50).optional(),
     inverted: z.boolean().optional(),
     reason: z.string().max(300).optional(),

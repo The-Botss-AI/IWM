@@ -4,7 +4,7 @@ import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import Link from '@tiptap/extension-link';
-import Placeholder from '@tiptap/extension-placeholder';
+import { Placeholder } from '@tiptap/extensions';
 import {
   Bold,
   ImagePlus,
@@ -22,6 +22,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Loader } from '@/components/ui/loader';
 import { CustomImage } from '@/components/editor/custom-image';
+import { SelectAllKeys } from '@/components/editor/extensions/select-all-keys';
 import { useFileUpload } from '@/hooks/use-file-upload';
 import { promptDialog } from '@/lib/prompt';
 import { toastError, toastErrorMessage } from '@/lib/toast';
@@ -46,6 +47,9 @@ interface Props {
  */
 export function MailEditor({ initialHtml, onChange, placeholder, resetKey }: Props) {
   const editor = useEditor({
+    // tiptap v3 defaults shouldRerenderOnTransaction to false; the toolbar, bubble menu
+    // and footer counts read editor state during render.
+    shouldRerenderOnTransaction: true,
     extensions: [
       StarterKit.configure({
         // Mail uses inline-only structure; drop heavy block nodes the toolbar
@@ -53,6 +57,10 @@ export function MailEditor({ initialHtml, onChange, placeholder, resetKey }: Pro
         heading: false,
         codeBlock: false,
         horizontalRule: false,
+        // v3 bundles Link/Underline; registered explicitly below.
+        link: false,
+        underline: false,
+        trailingNode: false,
       }),
       Underline,
       Link.configure({
@@ -64,6 +72,7 @@ export function MailEditor({ initialHtml, onChange, placeholder, resetKey }: Pro
       // shared with the document editor so signature and compose images can be
       // sized just like everywhere else images are inserted between text.
       CustomImage,
+      SelectAllKeys,
       Placeholder.configure({ placeholder: placeholder ?? 'Write your message…' }),
     ],
     content: initialHtml || '',
@@ -88,7 +97,7 @@ export function MailEditor({ initialHtml, onChange, placeholder, resetKey }: Pro
   useEffect(() => {
     if (!editor) return;
     if (resetKey === undefined) return;
-    editor.commands.setContent(initialHtml || '', false);
+    editor.commands.setContent(initialHtml || '', { emitUpdate: false });
     // We intentionally key on resetKey only - initialHtml is captured once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey, editor]);

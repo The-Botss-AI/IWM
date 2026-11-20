@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { env } from '@/lib/env';
 import { getApi } from '@/lib/api';
 import {
   Dialog,
@@ -50,20 +51,6 @@ import { useSessionContext } from '@/components/auth/session-gate';
 import { absoluteTime, relativeTime } from '@/lib/time';
 import { usePermissions } from '@/hooks/use-permissions';
 import { useRoles } from '@/hooks/use-roles';
-
-// Mirrors the API's ADMIN_EMAIL and CPANEL_DOMAIN (the web build can't read
-// the API env). Empty when unset: no account is shown as protected, and no
-// address is treated as a cPanel-managed mailbox.
-const PRIMARY_ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL ?? '').trim().toLowerCase();
-const CPANEL_DOMAIN = (process.env.NEXT_PUBLIC_CPANEL_DOMAIN ?? '').trim().toLowerCase();
-
-function isPrimaryAdminEmail(email: string): boolean {
-  return !!PRIMARY_ADMIN_EMAIL && email.toLowerCase() === PRIMARY_ADMIN_EMAIL;
-}
-
-function isOnCpanelDomain(email: string): boolean {
-  return !!CPANEL_DOMAIN && email.toLowerCase().endsWith(`@${CPANEL_DOMAIN}`);
-}
 
 const ROLE_LABEL: Record<SystemRole, string> = {
   SUPER_ADMIN: 'Super admin',
@@ -253,7 +240,9 @@ export default function UsersAdminPage() {
                               size="icon"
                               aria-label={`Delete ${u.name}`}
                               onClick={() => setDeleteTarget(u)}
-                              disabled={isPrimaryAdminEmail(u.email)}
+                              disabled={
+                                env.adminEmail !== '' && u.email.toLowerCase() === env.adminEmail
+                              }
                             >
                               <Trash2 className="text-ink-muted h-4 w-4" />
                             </Button>
@@ -373,7 +362,8 @@ function CreateUserDialog({
     }
   };
 
-  const isCpanelManaged = isOnCpanelDomain(form.email);
+  const onCpanelDomain =
+    env.cpanelDomain !== '' && form.email.toLowerCase().endsWith(`@${env.cpanelDomain}`);
 
   return (
     <Dialog
@@ -391,8 +381,8 @@ function CreateUserDialog({
           <DialogTitle>New user</DialogTitle>
           <DialogDescription>
             The password you set is also the user&apos;s login.
-            {CPANEL_DOMAIN
-              ? ` For @${CPANEL_DOMAIN} addresses it doubles as the webmail password and the Mail tab is auto-configured.`
+            {env.cpanelDomain
+              ? ` For @${env.cpanelDomain} addresses it doubles as the webmail password and the Mail tab is auto-configured.`
               : null}
           </DialogDescription>
         </DialogHeader>
@@ -427,7 +417,7 @@ function CreateUserDialog({
               onChange={(e) => setForm((s) => ({ ...s, password: e.target.value }))}
               required
             />
-            {isCpanelManaged ? (
+            {onCpanelDomain ? (
               <p className="text-ink-muted text-[11px]">
                 Must match the user&apos;s webmail password - the system uses it to sign in to their
                 mailbox.
@@ -539,7 +529,7 @@ function EditUserDialog({
   };
 
   const open = !!user;
-  const isPrimaryAdmin = !!user && isPrimaryAdminEmail(user.email);
+  const isPrimaryAdmin = env.adminEmail !== '' && user?.email.toLowerCase() === env.adminEmail;
 
   return (
     <Dialog
@@ -572,7 +562,8 @@ function EditUserDialog({
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Leave blank to keep current password"
             />
-            {user && isOnCpanelDomain(user.email) ? (
+            {env.cpanelDomain !== '' &&
+            user?.email.toLowerCase().endsWith(`@${env.cpanelDomain}`) ? (
               <p className="text-ink-muted text-[11px]">
                 Changing the password here also updates the user&apos;s Mail tab credentials so
                 webmail and CRM stay in sync.

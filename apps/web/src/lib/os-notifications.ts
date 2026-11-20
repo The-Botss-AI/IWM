@@ -1,6 +1,6 @@
 'use client';
 
-import type { RealtimePushEvent } from '@botss/shared-types';
+import { MEETING_REMINDER_PUSH_TYPE, type RealtimePushEvent } from '@botss/shared-types';
 
 import { getChatNotifications } from './chat-prefs';
 import { type NativeNotification, notifyNative } from './desktop-runtime';
@@ -85,12 +85,15 @@ export function showOsNotification(event: RealtimePushEvent): void {
     if (!markSeen(key)) fresh = false;
   }
   if (!fresh) return;
-  if (!osBannerAllowed(event.url, event.type)) return;
+  // A meeting reminder always shows (Do Not Disturb and the focused page do not
+  // hide it) and stays up until acted on.
+  const reminder = event.data?.['type'] === MEETING_REMINDER_PUSH_TYPE;
+  if (!reminder && !osBannerAllowed(event.url, event.type)) return;
   void notifyNative({
     title: event.title,
     body: event.body,
     url: event.url,
-    type: event.type,
+    type: reminder ? 'meeting-reminder' : event.type,
     ...(event.tag ? { tag: event.tag } : {}),
   });
 }

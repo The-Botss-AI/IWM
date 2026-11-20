@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { MAX_MEETING_REMINDERS, reminderMinutesSchema } from './meeting.js';
+
 /* eslint-disable @typescript-eslint/no-redeclare */
 
 /**
@@ -66,9 +68,33 @@ export const navigationPreferencesSchema = z.object({
 });
 export type NavigationPreferences = z.infer<typeof navigationPreferencesSchema>;
 
+/** Settings -> Notifications. Lives on the server (not just in the browser) so
+ *  the API can honour it before it sends a phone push. */
+export const notificationPreferencesSchema = z.object({
+  /** Do Not Disturb: no OS banner, sound or phone push on any device. The
+   *  in-app bell row is still written. */
+  doNotDisturb: z.boolean().optional(),
+});
+export type NotificationPreferences = z.infer<typeof notificationPreferencesSchema>;
+
+/** Settings -> Meetings. Lives on the server: the API applies the defaults
+ *  to meetings the user creates or is invited to. */
+export const meetingPreferencesSchema = z.object({
+  /** Reminders (minutes before the start) added for every new meeting.
+   *  Deduplicated and ascending; an empty list means none. */
+  defaultReminders: z
+    .array(reminderMinutesSchema)
+    .max(MAX_MEETING_REMINDERS)
+    .transform((list) => [...new Set(list)].sort((a, b) => a - b))
+    .optional(),
+});
+export type MeetingPreferences = z.infer<typeof meetingPreferencesSchema>;
+
 export const userPreferencesSchema = z.object({
   appearance: appearancePreferencesSchema.optional(),
   navigation: navigationPreferencesSchema.optional(),
+  notifications: notificationPreferencesSchema.optional(),
+  meetings: meetingPreferencesSchema.optional(),
 });
 export type UserPreferences = z.infer<typeof userPreferencesSchema>;
 
@@ -91,7 +117,7 @@ function pickValid<S extends z.ZodRawShape>(
   const source = raw as Record<string, unknown>;
   for (const key of Object.keys(shape) as Array<keyof S & string>) {
     if (source[key] === undefined) continue;
-    const parsed = (shape[key] as z.ZodTypeAny).safeParse(source[key]);
+    const parsed = (shape[key] as z.ZodType).safeParse(source[key]);
     if (parsed.success && parsed.data !== undefined) {
       out[key] = parsed.data as z.infer<S[typeof key]>;
     }
@@ -127,6 +153,12 @@ export function parseStoredUserPreferences(raw: unknown): UserPreferences {
     navigation.hidden = [...ids].slice(0, MAX_HIDDEN_NAV_IDS);
   }
   if (Object.keys(navigation).length > 0) out.navigation = navigation;
+
+  const notifications = pickValid(notificationPreferencesSchema.shape, doc.notifications);
+  if (Object.keys(notifications).length > 0) out.notifications = notifications;
+
+  const meetings = pickValid(meetingPreferencesSchema.shape, doc.meetings);
+  if (Object.keys(meetings).length > 0) out.meetings = meetings;
 
   return out;
 }

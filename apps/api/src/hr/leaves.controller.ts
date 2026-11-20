@@ -9,6 +9,7 @@ import {
   updateLeaveStatusSchema,
 } from '@botss/shared-types';
 
+import { RequireAddon } from '../addons/require-addon.decorator';
 import { CurrentUser, type AuthedUser } from '../common/decorators/current-user.decorator';
 import { SkipPermissions } from '../common/decorators/skip-permissions.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
@@ -21,6 +22,7 @@ import { LeavesService } from './leaves.service';
  * Endpoints intentionally don't carry a workspace prefix - leave belongs
  * to the user, not a workspace.
  */
+@RequireAddon('hr')
 @Controller('leaves')
 export class LeavesController {
   constructor(private readonly leaves: LeavesService) {}

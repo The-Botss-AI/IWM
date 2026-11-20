@@ -30,6 +30,7 @@ import {
   parseInvitationIdentifier,
 } from '../invitations/invitation-tokens';
 import { orgWorkspaceMembership, userOrgId } from '../common/tenant-scope';
+import { assertNotVerifiedElsewhere } from '../organizations/domain-claims';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { SecurityAlertsService } from '../security-alerts/security-alerts.service';
@@ -350,6 +351,11 @@ export class WorkspacesService {
       });
     }
 
+    // A new account on a domain another organization verified belongs there,
+    // not here (only DNS-verified domains count, see domain-claims.ts).
+    if (!existingUser)
+      await assertNotVerifiedElsewhere(this.prisma, workspace.organizationId, email);
+
     // Create the User if missing. We always end up with both a User row and a
     // WorkspaceMembership row - `pending` is derived from emailVerified + the
     // absence of a credential Account.
@@ -460,9 +466,8 @@ export class WorkspacesService {
     membershipId: string,
   ): Promise<InviteMemberResponse> {
     // Same gate as `inviteMember` - regenerating a token mints a fresh, live
-    // credential for joining the workspace, so it needs the invite-level role,
-    // not just the broad CASL `manage WorkspaceMembership` grant every member
-    // carries in Phase 1.
+    // credential for joining the workspace, so it needs the `members.manage`
+    // permission itself.
     if (!(await this.actorHas(workspaceId, actingUserId, 'members.manage'))) {
       throw new ForbiddenException({
         title: 'Only the workspace owner or an admin can resend invitations',

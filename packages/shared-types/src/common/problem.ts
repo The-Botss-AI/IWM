@@ -8,7 +8,7 @@ export const problemDetailsSchema = z.object({
   detail: z.string().optional(),
   instance: z.string().optional(),
   /** Field-level validation errors (extension). Keyed by JSON pointer to the offending field. */
-  errors: z.record(z.array(z.string())).optional(),
+  errors: z.record(z.string(), z.array(z.string())).optional(),
   /** Application-specific machine code (extension). */
   code: z.string().optional(),
 });

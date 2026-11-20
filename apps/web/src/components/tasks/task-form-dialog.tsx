@@ -1,5 +1,6 @@
 'use client';
 
+import type { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import {
@@ -23,7 +24,7 @@ export function TaskFormDialog({ projectId, defaultStatus, onClose }: Props) {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-  } = useForm<CreateTaskInput>({
+  } = useForm<z.input<typeof createTaskSchema>, unknown, CreateTaskInput>({
     resolver: zodResolver(createTaskSchema),
     defaultValues: {
       projectId,

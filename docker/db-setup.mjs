@@ -8,6 +8,12 @@
  *      `pnpm quickstart` uses and both setups share one migration history.
  *   2. Applies migrations with `prisma migrate deploy` (never prompts, never
  *      resets).
+ *   2b. When the schema is ahead of the database (an existing install after
+ *      pulling a newer version), writes an `_upgrade` migration from
+ *      `prisma migrate diff` and deploys it. Only purely additive changes are
+ *      written: if the diff contains a DROP, RENAME, TRUNCATE or DELETE (for
+ *      example SQL-only indexes you added in your own migrations), it stops
+ *      and prints the SQL instead.
  *   3. Seeds the demo data while the database has no users, so a deleted
  *      demo admin is not brought back on the next start.
  *
@@ -65,22 +71,10 @@ function handToHostUser(path) {
   }
 }
 
-function writeInitMigration() {
-  const sql = run(
-    'prisma',
-    [
-      'migrate',
-      'diff',
-      '--from-empty',
-      '--to-schema-datamodel',
-      'prisma/schema.prisma',
-      '--script',
-    ],
-    { capture: true },
-  );
+function writeMigration(name, sql) {
   // Prisma's own naming: UTC YYYYMMDDHHMMSS_name.
   const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
-  const dir = join(MIGRATIONS_DIR, `${stamp}_init`);
+  const dir = join(MIGRATIONS_DIR, `${stamp}_${name}`);
   const created = [];
   if (!existsSync(MIGRATIONS_DIR)) {
     mkdirSync(MIGRATIONS_DIR);
@@ -95,7 +89,26 @@ function writeInitMigration() {
     created.push(lock);
   }
   created.forEach(handToHostUser);
-  console.log(`[db-setup] wrote migration ${stamp}_init`);
+  console.log(`[db-setup] wrote migration ${stamp}_${name}`);
+}
+
+function diffSql(from) {
+  return run(
+    'prisma',
+    ['migrate', 'diff', ...from, '--to-schema-datamodel', 'prisma/schema.prisma', '--script'],
+    { capture: true },
+  );
+}
+
+/** Changes schema.prisma has that the database does not, as SQL ('' if none). */
+function pendingSchemaSql() {
+  const sql = diffSql(['--from-schema-datasource', 'prisma/schema.prisma']);
+  const hasStatement = sql.split(/\r?\n/).some((l) => l.trim() && !l.trim().startsWith('--'));
+  return hasStatement ? sql : '';
+}
+
+function writeInitMigration() {
+  writeMigration('init', diffSql(['--from-empty']));
 }
 
 async function main() {
@@ -117,6 +130,21 @@ async function main() {
     }
 
     run('prisma', ['migrate', 'deploy']);
+
+    const pending = pendingSchemaSql();
+    if (pending) {
+      if (/\b(DROP|RENAME|TRUNCATE|DELETE)\b/i.test(pending)) {
+        fail(
+          'schema.prisma differs from the database in a way that would drop, rename or delete something.',
+          'Nothing was changed. Review the SQL below and create the migration yourself',
+          '(see "Upgrading an existing install" in the README):',
+          '',
+          pending,
+        );
+      }
+      writeMigration('upgrade', pending);
+      run('prisma', ['migrate', 'deploy']);
+    }
     console.log('[db-setup] schema is up to date');
 
     if ((await prisma.user.count()) > 0) {

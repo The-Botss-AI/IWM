@@ -18,6 +18,8 @@ import {
   renderInvoiceEmail,
   renderResetPasswordEmail,
   renderSignatureCompletedEmail,
+  renderFormSubmissionEmail,
+  renderMeetingInviteEmail,
   renderSignatureDeclinedEmail,
   renderSignatureRequestEmail,
 } from './mail.sender';
@@ -63,7 +65,7 @@ export class EmailProcessor extends WorkerHost {
     const rendered = render(data);
 
     // Invoice mail carries the PDF and a Reply-To; everything else is plain.
-    const extras: Pick<MailSendArgs, 'attachments' | 'replyTo'> = {};
+    const extras: Pick<MailSendArgs, 'attachments' | 'replyTo' | 'icalEvent'> = {};
     if (data.kind === 'invoice') {
       const pdf = await this.files.getObjectBuffer(data.workspaceId, data.pdfFileId);
       if (!pdf) {
@@ -80,6 +82,10 @@ export class EmailProcessor extends WorkerHost {
     }
     if (data.kind === 'signature-request' && data.replyTo) {
       extras.replyTo = data.replyTo;
+    }
+    if (data.kind === 'meeting-invite') {
+      extras.icalEvent = { method: data.method, content: data.ics, filename: 'invite.ics' };
+      if (data.replyTo) extras.replyTo = data.replyTo;
     }
     if (data.kind === 'signature-completed') {
       // includeDeleted: the sealed PDF must still attach if someone removed
@@ -125,11 +131,14 @@ export class EmailProcessor extends WorkerHost {
         }
       }
 
-      // Dedicated MailAccount (e.g. the MAIL_FROM no-reply address imported into the app).
+      // Dedicated MailAccount (the MAIL_FROM address imported into the CRM).
       // Uses the CRM's MailSendService outbox pipeline to send raw RFC 822 MIME
       // and append a copy to the IMAP Sent folder, exactly like user webmail!
-      if (this.mailSend) {
-        const fromHeader = this.sender.getFromAddress() || 'no-reply@localhost';
+      // The outbox pipeline sends a plain message (no attachments, no calendar
+      // part), so a meeting invitation never takes it: it would arrive
+      // without the event.
+      if (this.mailSend && data.kind !== 'meeting-invite') {
+        const fromHeader = this.sender.getFromAddress();
         const bareEmail = (fromHeader.match(/<([^>]+)>/)?.[1] ?? fromHeader).trim();
         const mailAccount = await this.prisma.client.mailAccount.findFirst({
           where: {
@@ -242,6 +251,24 @@ function render(data: EmailJobData): { subject: string; html: string; text: stri
         inviterName: data.inviterName,
         url: data.url,
         expiresAtLabel: data.expiresAtLabel,
+      });
+    case 'meeting-invite':
+      return renderMeetingInviteEmail({
+        variant: data.variant,
+        recipientName: data.recipientName,
+        organizerName: data.organizerName,
+        title: data.title,
+        whenLabel: data.whenLabel,
+        repeatLabel: data.repeatLabel,
+        location: data.location,
+        meetingUrl: data.meetingUrl,
+        rsvp: data.rsvp,
+      });
+    case 'form-submission':
+      return renderFormSubmissionEmail({
+        formTitle: data.formTitle,
+        submittedBy: data.submittedBy,
+        url: data.url,
       });
     case 'signature-declined':
       return renderSignatureDeclinedEmail({

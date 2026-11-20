@@ -20,6 +20,7 @@ export interface ChatNotifications {
 
 const APPEARANCE_KEY = 'botss.chat.appearance.v1';
 const NOTIFICATIONS_KEY = 'botss.chat.notifications.v1';
+const NOTIFICATIONS_OWNER_KEY = 'botss.chat.notifications.owner.v1';
 
 const DEFAULT_APPEARANCE: ChatAppearance = {
   theme: 'light',
@@ -66,11 +67,55 @@ export function getChatNotifications(): ChatNotifications {
   return read(NOTIFICATIONS_KEY, DEFAULT_NOTIFICATIONS);
 }
 
-export function setChatNotifications(next: Partial<ChatNotifications>): void {
-  if (typeof window === 'undefined') return;
+/** Fired when the USER flips Do Not Disturb (not when the server copy is
+ *  applied), so the preferences sync can save it for the phone push check. */
+export const DND_USER_CHANGE_EVT = 'botss-dnd-user-change';
+
+function writeChatNotifications(next: Partial<ChatNotifications>): void {
   const merged = { ...getChatNotifications(), ...next };
   window.localStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(merged));
   window.dispatchEvent(new CustomEvent(NOTIFICATIONS_EVT, { detail: merged }));
+}
+
+export function setChatNotifications(next: Partial<ChatNotifications>): void {
+  if (typeof window === 'undefined') return;
+  writeChatNotifications(next);
+  if (next.doNotDisturb !== undefined) {
+    window.dispatchEvent(new CustomEvent(DND_USER_CHANGE_EVT, { detail: next.doNotDisturb }));
+  }
+}
+
+/** Apply the server's Do Not Disturb to this device without echoing it back. */
+export function replaceDoNotDisturb(value: boolean): void {
+  if (typeof window === 'undefined') return;
+  if (getChatNotifications().doNotDisturb === value) return;
+  writeChatNotifications({ doNotDisturb: value });
+}
+
+export function getChatNotificationsOwner(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(NOTIFICATIONS_OWNER_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Bind the device's notification settings to `userId`. Settings owned by
+ * someone else are reset to defaults, so one person's Do Not Disturb is never
+ * uploaded as another's. Unowned (pre-sync) settings are adopted as-is.
+ */
+export function claimChatNotificationsFor(userId: string): void {
+  if (typeof window === 'undefined' || !userId) return;
+  const owner = getChatNotificationsOwner();
+  if (owner === userId) return;
+  if (owner !== null) writeChatNotifications(DEFAULT_NOTIFICATIONS);
+  try {
+    window.localStorage.setItem(NOTIFICATIONS_OWNER_KEY, userId);
+  } catch {
+    // Non-fatal: the next claim simply runs again.
+  }
 }
 
 export function useChatAppearance(): ChatAppearance {

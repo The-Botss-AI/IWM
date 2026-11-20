@@ -34,6 +34,11 @@ export interface MailSendArgs {
   /** Where replies go, e.g. the organization's billing address. */
   replyTo?: string;
   attachments?: { filename: string; content: Buffer; contentType: string }[];
+  /**
+   * A calendar invitation: sent as a `text/calendar; method=...` alternative
+   * (mail clients show Accept / Decline) and as an `invite.ics` attachment.
+   */
+  icalEvent?: { method: 'REQUEST' | 'CANCEL'; content: string; filename?: string };
 }
 
 export interface MailSendOutcome {
@@ -206,6 +211,7 @@ export class MailSender {
         text: args.text,
         ...(args.replyTo ? { replyTo: stripHeaderUnsafe(args.replyTo) } : {}),
         ...(args.attachments ? { attachments: args.attachments } : {}),
+        ...(args.icalEvent ? { icalEvent: args.icalEvent } : {}),
       });
 
       const rejected = (info.rejected ?? []) as string[];
@@ -273,6 +279,7 @@ export class MailSender {
         text: args.text,
         ...(args.replyTo ? { replyTo: stripHeaderUnsafe(args.replyTo) } : {}),
         ...(args.attachments ? { attachments: args.attachments } : {}),
+        ...(args.icalEvent ? { icalEvent: args.icalEvent } : {}),
       });
 
       const rejected = (info.rejected ?? []) as string[];
@@ -737,6 +744,122 @@ export function renderSignatureDeclinedEmail(args: {
       <p style="margin:0 0 16px;padding:12px 14px;background:#fef2f2;border-radius:8px;color:#7f1d1d;line-height:1.6">${multiline(args.reason)}</p>
       <p style="margin:0 0 24px">The request is closed. You can send a new one from the document.</p>
       <p style="margin:0"><a href="${escapeHtml(args.url)}" style="${BUTTON_STYLE}">Open the document</a></p>
+    </div>
+  `;
+  return { subject, html, text };
+}
+
+export function renderFormSubmissionEmail(args: {
+  formTitle: string;
+  submittedBy: string;
+  url: string;
+}): { subject: string; html: string; text: string } {
+  const subject = stripHeaderUnsafe(`New response to "${args.formTitle}"`);
+  const text = [
+    `${args.submittedBy} answered "${args.formTitle}".`,
+    '',
+    'Open the form to see the answers:',
+    args.url,
+    '',
+    '- The Botss',
+  ].join('\n');
+  const html = `
+    <div style="font-family:system-ui,-apple-system,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#0f172a">
+      ${emailHeader()}
+      <h2 style="margin:24px 0 16px;font-size:18px">New form response</h2>
+      <p style="margin:0 0 24px">${escapeHtml(args.submittedBy)} answered "<strong>${escapeHtml(args.formTitle)}</strong>".</p>
+      <p style="margin:0"><a href="${escapeHtml(args.url)}" style="${BUTTON_STYLE}">See the answers</a></p>
+    </div>
+  `;
+  return { subject, html, text };
+}
+
+/**
+ * Meeting invitation, update or cancellation for an EXTERNAL guest. The
+ * calendar data travels as the invite (`icalEvent`); this is the readable
+ * part. RSVP links are login-free and carry a raw token: never log them.
+ */
+export function renderMeetingInviteEmail(args: {
+  variant: 'invite' | 'update' | 'cancel';
+  recipientName: string | null;
+  organizerName: string;
+  title: string;
+  whenLabel: string;
+  repeatLabel: string | null;
+  location: string | null;
+  meetingUrl: string | null;
+  rsvp: { accept: string; maybe: string; decline: string } | null;
+}): { subject: string; html: string; text: string } {
+  const prefix =
+    args.variant === 'cancel'
+      ? 'Cancelled: '
+      : args.variant === 'update'
+        ? 'Updated: '
+        : 'Invitation: ';
+  const subject = stripHeaderUnsafe(`${prefix}${args.title} - ${args.whenLabel}`).slice(0, 250);
+  const name = args.recipientName ? ` ${args.recipientName}` : '';
+  const lead =
+    args.variant === 'cancel'
+      ? `${args.organizerName} cancelled this meeting.`
+      : args.variant === 'update'
+        ? `${args.organizerName} updated this meeting.`
+        : `${args.organizerName} invited you to a meeting.`;
+  const details = [
+    `When: ${args.whenLabel}`,
+    ...(args.repeatLabel ? [`Repeats: ${args.repeatLabel}`] : []),
+    ...(args.location ? [`Where: ${args.location}`] : []),
+    ...(args.meetingUrl ? [`Join: ${args.meetingUrl}`] : []),
+  ];
+  const text = [
+    `Hi${name},`,
+    '',
+    lead,
+    '',
+    args.title,
+    ...details,
+    ...(args.rsvp
+      ? [
+          '',
+          'Will you attend?',
+          `Yes: ${args.rsvp.accept}`,
+          `Maybe: ${args.rsvp.maybe}`,
+          `No: ${args.rsvp.decline}`,
+        ]
+      : []),
+    '',
+    '- The Botss',
+  ].join('\n');
+  const row = (label: string, value: string) =>
+    `<tr><td style="padding:4px 12px 4px 0;color:#64748b;vertical-align:top">${label}</td><td style="padding:4px 0">${value}</td></tr>`;
+  const rows = [
+    row('When', escapeHtml(args.whenLabel)),
+    ...(args.repeatLabel ? [row('Repeats', escapeHtml(args.repeatLabel))] : []),
+    ...(args.location ? [row('Where', multiline(args.location))] : []),
+    ...(args.meetingUrl
+      ? [
+          row(
+            'Join',
+            `<a href="${escapeHtml(args.meetingUrl)}" style="color:#4f46e5;word-break:break-all">${escapeHtml(args.meetingUrl)}</a>`,
+          ),
+        ]
+      : []),
+  ].join('');
+  const rsvp = args.rsvp
+    ? `<p style="margin:24px 0 8px">Will you attend?</p>
+      <p style="margin:0">
+        <a href="${escapeHtml(args.rsvp.accept)}" style="${BUTTON_STYLE};margin:0 8px 8px 0">Yes</a>
+        <a href="${escapeHtml(args.rsvp.maybe)}" style="${BUTTON_STYLE};background:#64748b;margin:0 8px 8px 0">Maybe</a>
+        <a href="${escapeHtml(args.rsvp.decline)}" style="${BUTTON_STYLE};background:#b91c1c;margin:0 0 8px 0">No</a>
+      </p>`
+    : '';
+  const html = `
+    <div style="font-family:system-ui,-apple-system,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#0f172a">
+      ${emailHeader()}
+      <p style="margin:24px 0 12px">Hi${escapeHtml(name)},</p>
+      <p style="margin:0 0 16px">${escapeHtml(lead)}</p>
+      <h2 style="margin:0 0 12px;font-size:18px${args.variant === 'cancel' ? ';text-decoration:line-through' : ''}">${escapeHtml(args.title)}</h2>
+      <table style="border-collapse:collapse;font-size:14px">${rows}</table>
+      ${rsvp}
     </div>
   `;
   return { subject, html, text };

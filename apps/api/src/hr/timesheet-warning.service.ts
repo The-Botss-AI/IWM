@@ -1,5 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 
+import { AddonsService } from '../addons/addons.service';
+import type { TimesheetWarningConfig } from '../addons/hr-config';
 import { ChatGateway } from '../chat/chat.gateway';
 import { ChatService } from '../chat/chat.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -7,16 +9,19 @@ import { PrismaService } from '../prisma/prisma.service';
 /**
  * Detects employees who stop posting timesheets and alerts HR.
  *
- * Configured by two env vars; the pass does nothing unless both are set:
- *   - `HR_EMAIL_DOMAIN`: the organization to scan, matched on its
- *     `emailDomain`; only users whose email ends with this domain are
- *     scanned or notified.
- *   - `HR_SENDER_EMAIL`: the existing user the warnings are sent from.
+ * Which organizations: those with the `hr` add-on on whose HR settings turn
+ * timesheet warnings on (sender + optional staff email domain, see
+ * `addons/hr-config.ts`). Before add-ons only the platform organization got
+ * warnings, with its domain and sender written into the code; it keeps them
+ * through the HR_SENDER_EMAIL / HR_EMAIL_DOMAIN env fallback while it has no
+ * own settings. Other organizations are off until their admin turns it on.
  *
- * Who is SCANNED: only `EMPLOYEE`-role users in that organization whose email
- * ends with the domain AND who are not `timesheetExempt`. HR / admins are never scanned
- * (hard-excluded), and any individual flagged "not obligated to submit
- * timesheets" via `User.timesheetExempt` is skipped.
+ * Who is SCANNED, per organization: only `EMPLOYEE`-role users of that
+ * organization (on its staff email domain, when one is set) who are not
+ * `timesheetExempt`. HR / admins are never scanned (hard-excluded), and any
+ * individual flagged "not obligated to submit timesheets" via
+ * `User.timesheetExempt` is skipped. The sender must be a live account of the
+ * same organization.
  *
  * Who is NOTIFIED: the org's `HR`-role users AND the delinquent employee
  * themselves. HR receives a per-employee warning (with the employee's name)
@@ -44,12 +49,6 @@ export class TimesheetWarningService {
   private static readonly THRESHOLD_DAYS = 3;
   /** How far back to pull attendance when measuring a streak. */
   private static readonly LOOKBACK_DAYS = 45;
-  /** The scanned organization's email domain + the HR sender identity, from env. */
-  private static config(): { domain: string; senderEmail: string } | null {
-    const domain = process.env.HR_EMAIL_DOMAIN?.trim().toLowerCase();
-    const senderEmail = process.env.HR_SENDER_EMAIL?.trim().toLowerCase();
-    return domain && senderEmail ? { domain, senderEmail } : null;
-  }
   /**
    * Roles that get a personal timesheet warning. Currently employees only;
    * widen this later if PMs (or others) should be nudged too.
@@ -68,7 +67,34 @@ export class TimesheetWarningService {
     private readonly prisma: PrismaService,
     private readonly chat: ChatService,
     private readonly gateway: ChatGateway,
+    @Optional() private readonly addons?: AddonsService,
   ) {}
+
+  /**
+   * Organizations whose timesheet warnings are on: the platform organization
+   * (env fallback) and every organization with its own HR add-on row.
+   */
+  private async targets(): Promise<
+    Array<{ organizationId: string; config: TimesheetWarningConfig }>
+  > {
+    if (!this.addons) return [];
+    const orgs = await this.prisma.client.organization.findMany({
+      where: {
+        deletedAt: null,
+        isActive: true,
+        OR: [{ isRoot: true }, { addons: { some: { key: 'hr' } } }],
+      },
+      select: { id: true },
+    });
+    const out: Array<{ organizationId: string; config: TimesheetWarningConfig }> = [];
+    for (const org of orgs) {
+      if (!(await this.addons.isEnabled(org.id, 'hr'))) continue;
+      const cfg = await this.addons.hrConfig(org.id);
+      if (cfg.timesheetWarnings)
+        out.push({ organizationId: org.id, config: cfg.timesheetWarnings });
+    }
+    return out;
+  }
 
   /**
    * Scan every in-scope employee and DM a warning to those whose missed
@@ -82,33 +108,56 @@ export class TimesheetWarningService {
     employeesWarned: number;
     supervisorsNotified: number;
   }> {
-    const config = TimesheetWarningService.config();
-    if (!config) {
-      this.logger.debug('HR_EMAIL_DOMAIN / HR_SENDER_EMAIL not set; skipping timesheet warnings.');
-      return { scanned: 0, warned: 0, employeesWarned: 0, supervisorsNotified: 0 };
+    const total = { scanned: 0, warned: 0, employeesWarned: 0, supervisorsNotified: 0 };
+    const targets = await this.targets();
+    if (targets.length === 0) {
+      this.logger.log('No organization has timesheet warnings on; skipping.');
+      return total;
     }
-    const { domain, senderEmail } = config;
+    for (const target of targets) {
+      try {
+        const r = await this.warnOrganization(target.organizationId, target.config, referenceDate);
+        total.scanned += r.scanned;
+        total.warned += r.warned;
+        total.employeesWarned += r.employeesWarned;
+        total.supervisorsNotified += r.supervisorsNotified;
+      } catch (err) {
+        this.logger.error(
+          `Timesheet warnings failed orgId=${target.organizationId} message=${(err as Error)?.message ?? 'unknown'}`,
+        );
+      }
+    }
+    return total;
+  }
 
-    const org = await this.prisma.client.organization.findUnique({
-      where: { emailDomain: domain },
-      select: { id: true },
-    });
-    if (!org) {
-      this.logger.warn(
-        `No organization found for emailDomain=${domain}; skipping timesheet warnings.`,
-      );
-      return { scanned: 0, warned: 0, employeesWarned: 0, supervisorsNotified: 0 };
-    }
+  /** One organization's run (see the class comment). */
+  private async warnOrganization(
+    organizationId: string,
+    config: TimesheetWarningConfig,
+    referenceDate?: Date,
+  ): Promise<{
+    scanned: number;
+    warned: number;
+    employeesWarned: number;
+    supervisorsNotified: number;
+  }> {
+    const org = { id: organizationId };
+    const domainFilter = config.emailDomain
+      ? { email: { endsWith: `@${config.emailDomain}` } }
+      : {};
 
     const hrSender = await this.prisma.client.user.findFirst({
       where: {
-        email: senderEmail,
+        email: config.senderEmail,
+        organizationId,
         deletedAt: null,
       },
       select: { id: true },
     });
     if (!hrSender) {
-      this.logger.warn(`No active user with email=${senderEmail}; cannot send timesheet warnings.`);
+      this.logger.warn(
+        `No active user with email=${config.senderEmail} in orgId=${organizationId}; cannot send timesheet warnings.`,
+      );
       return { scanned: 0, warned: 0, employeesWarned: 0, supervisorsNotified: 0 };
     }
 
@@ -116,7 +165,7 @@ export class TimesheetWarningService {
       where: {
         organizationId: org.id,
         deletedAt: null,
-        email: { endsWith: `@${domain}` },
+        ...domainFilter,
         // Skip anyone explicitly not obligated to submit timesheets.
         timesheetExempt: false,
         // Scan only the opted-in roles, and hard-exclude the exempt ones
@@ -140,7 +189,7 @@ export class TimesheetWarningService {
         organizationId: org.id,
         systemRole: 'HR',
         deletedAt: null,
-        email: { endsWith: `@${domain}` },
+        ...domainFilter,
         id: { not: hrSender.id },
       },
       select: { id: true },
@@ -217,7 +266,7 @@ export class TimesheetWarningService {
 
     const supervisorsNotified =
       delinquents.length > 0
-        ? await this.notifyHrSummary(org.id, domain, hrSender.id, delinquents)
+        ? await this.notifyHrSummary(org.id, hrSender.id, delinquents, config.emailDomain)
         : 0;
 
     this.logger.log(
@@ -235,20 +284,20 @@ export class TimesheetWarningService {
    * DM the org's HR-role users a single roll-up of the employees flagged
    * this run. Admins / super-admins are deliberately NOT notified - timesheet
    * follow-up is HR's responsibility. The HR sender and anyone outside the
-   * configured domain are excluded.
+   * staff email domain (when one is set) are excluded.
    */
   private async notifyHrSummary(
     orgId: string,
-    domain: string,
     hrSenderId: string,
     delinquents: { name: string | null; streak: number }[],
+    emailDomain: string | null,
   ): Promise<number> {
     const supervisors = await this.prisma.client.user.findMany({
       where: {
         organizationId: orgId,
         systemRole: 'HR',
         deletedAt: null,
-        email: { endsWith: `@${domain}` },
+        ...(emailDomain ? { email: { endsWith: `@${emailDomain}` } } : {}),
         id: { not: hrSenderId },
       },
       select: { id: true },

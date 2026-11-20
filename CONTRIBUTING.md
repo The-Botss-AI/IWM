@@ -31,12 +31,18 @@ Requirements: Node.js >= 22.12, pnpm >= 9, Docker.
 Run these before you push; a pull request should pass all of them.
 
 ```bash
-pnpm typecheck    # TypeScript strict mode across every package
-pnpm lint         # eslint
-pnpm test         # package tests and the API check scripts
-# or all three:
+pnpm typecheck      # TypeScript strict mode across every package
+pnpm lint           # eslint
+pnpm test           # package tests (Vitest) and the API and web check scripts
+pnpm format:check   # Prettier; `pnpm format` fixes what it reports
+# or typecheck, lint, test and the Docker config check in one go:
 pnpm verify
 ```
+
+CI (`.github/workflows/ci.yml`) runs `pnpm install --frozen-lockfile`,
+`pnpm format:check` and `pnpm verify` on every pull request, plus a Docker job
+that builds the app image, signs in as the demo admin and uploads a file. If
+you change dependencies, commit the updated `pnpm-lock.yaml`.
 
 If you have [gitleaks](https://github.com/gitleaks/gitleaks) installed, also
 run `gitleaks detect --source .` to make sure no secret slipped in. Never
@@ -72,7 +78,8 @@ commit `.env` files, keys or real customer data.
 - API: the check scripts in `apps/api/src/scripts/check-*.ts` (run by
   `pnpm --filter @botss/api test`). Add or extend one for behaviour you change.
 - Web: `apps/web/scripts/check-*.mjs` (run by `pnpm --filter @botss/web test`).
-- Packages do not have tests yet; new ones should use Vitest.
+- Packages: Vitest (for example `packages/forms/src/forms.test.ts`, run by
+  `pnpm --filter @botss/forms test`). New package tests should use Vitest too.
 
 ## License
 

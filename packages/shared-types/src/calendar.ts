@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { cuid } from './common/id.js';
 
-export const CalendarEventType = z.enum(['task', 'todo', 'time']);
+export const CalendarEventType = z.enum(['task', 'todo', 'time', 'meeting']);
 export type CalendarEventType = z.infer<typeof CalendarEventType>;
 
 export const calendarEventSchema = z.object({

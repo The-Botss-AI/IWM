@@ -14,7 +14,10 @@ export type AppSubject =
   // E-signature requests. Workspace-scoped like Document; the service limits
   // send/cancel to the request's creator or a workspace OWNER/ADMIN.
   | 'SignatureRequest'
-  // HR / Attendance - Phase 4+. Org-level subjects gated by SystemRole
+  // Form builder. Workspace-scoped; FormsService limits edit, share and
+  // responses to the form's creator or a workspace / org admin.
+  | 'Form'
+  // HR / Attendance. Org-level subjects gated by SystemRole
   // (ADMIN / HR) rather than workspace role.
   | 'Attendance'
   | 'Leave'

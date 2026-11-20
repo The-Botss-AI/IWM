@@ -64,7 +64,7 @@ interface ChatRequestRow {
 }
 
 /**
- * Cross-organization chat requests (A5).
+ * Cross-organization chat requests.
  *
  * Enumeration safety is the core rule: `send` never looks the recipient up.
  * It stores the email and answers with the same notice for any address, with

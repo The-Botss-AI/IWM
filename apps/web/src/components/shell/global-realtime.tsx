@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useSessionContext } from '@/components/auth/session-gate';
 import { useCall } from '@/components/chat/call-context';
 import { IncomingCallModal } from '@/components/chat/incoming-call-modal';
+import { MeetingReminderAlarms } from '@/components/meetings/meeting-reminder-alarms';
 import { pushInAppNotification, type InAppNotification } from '@/lib/in-app-notifications';
 import { useChatRooms } from '@/hooks/use-chat';
 import { useChatNotifyingEffects } from '@/hooks/use-chat-notifications';
@@ -194,6 +195,7 @@ export function GlobalRealtime() {
 
   return (
     <>
+      <MeetingReminderAlarms userId={userId || null} />
       {call.phase === 'incoming' && call.incoming ? (
         <IncomingCallModal
           callerName={incomingCallerName}

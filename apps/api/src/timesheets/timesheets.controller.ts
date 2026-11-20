@@ -17,6 +17,7 @@ import {
   updateTimeEntrySchema,
 } from '@botss/shared-types';
 
+import { RequireAddon } from '../addons/require-addon.decorator';
 import { AdminUsersService } from '../admin/admin-users.service';
 import { CurrentUser, type AuthedUser } from '../common/decorators/current-user.decorator';
 import { CurrentWorkspaceId } from '../common/decorators/current-workspace.decorator';
@@ -141,6 +142,8 @@ export class TimesheetsController {
 
   @Get('admin/attendance')
   @SkipPermissions()
+  // Attendance is part of HR; the rest of timesheets is not.
+  @RequireAddon('hr')
   async adminAttendance(
     @CurrentUser() user: AuthedUser,
     @Query(new ZodValidationPipe(adminAttendanceQuerySchema))

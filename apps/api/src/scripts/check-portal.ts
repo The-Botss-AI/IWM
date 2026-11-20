@@ -541,7 +541,7 @@ async function main(): Promise<void> {
     const mail = renderClientPortalEmail({
       variant,
       recipientName: '<b>Ann</b>',
-      agencyName: 'Botss & Co',
+      agencyName: 'Example & Co',
       clientName: 'Acme <Ltd>',
       inviterName: 'Zed',
       url: 'https://app.test/invitations/accept?token=abc&x="y"',

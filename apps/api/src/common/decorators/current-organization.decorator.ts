@@ -6,9 +6,8 @@ import {
 
 /**
  * Resolves the caller's active organization id. We trust `req.user.organizationId`
- * which the AuthGuard populates from the DB. The backfill migration ensures
- * every existing user has this set (Botss root for legacy rows), so it is
- * always present for authenticated callers; an undefined value indicates a
+ * which the AuthGuard populates from the DB. It is always present for
+ * authenticated staff callers; an undefined value indicates a
  * misconfigured guard chain and is a hard fail (not a silent default).
  */
 export const CurrentOrganizationId = createParamDecorator(

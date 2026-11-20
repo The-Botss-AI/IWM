@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { useState } from 'react';
 import type { LeaveWithRefs } from '@botss/shared-types';
 
+import { AddonOffNotice } from '@/components/addons/addon-off-notice';
+import { useAddons } from '@/hooks/use-addons';
 import { LeaveTable } from '@/components/leave/leave-table';
 import { RequestLeaveDialog } from '@/components/leave/request-leave-dialog';
 import { Button } from '@/components/ui/button';
@@ -36,7 +38,7 @@ const STATUS_FILTERS: ReadonlyArray<{ value: LeaveStatusFilter; label: string }>
  * HR; deciding needs `hr.leave.approve`, which the server enforces (and it
  * refuses anyone deciding their own request).
  */
-export default function AdminLeavesPage() {
+function AdminLeavesPageContent() {
   const perms = usePermissions();
   if (perms.checking) return <Loader size="sm" label="Loading leave requests" />;
   if (!perms.has('hr.leave.approve')) {
@@ -208,4 +210,11 @@ function LeaveReview() {
       />
     </div>
   );
+}
+
+/** Hidden while the organization has the HR add-on switched off. */
+export default function AdminLeavesPage() {
+  const addons = useAddons();
+  if (!addons.isOn('hr')) return <AddonOffNotice name="HR" />;
+  return <AdminLeavesPageContent />;
 }

@@ -5,6 +5,8 @@ import dynamic from 'next/dynamic';
 import { useMemo, useState } from 'react';
 import type { ContractStatus, PaymentStatus } from '@botss/shared-types';
 
+import { AddonOffNotice } from '@/components/addons/addon-off-notice';
+import { useAddons } from '@/hooks/use-addons';
 import { ContractFormDialog } from '@/components/financials/contract-form-dialog';
 import { ContractList } from '@/components/financials/contract-list';
 import { ExpenseFormDialog, ExpenseList } from '@/components/financials/expense-list';
@@ -86,6 +88,7 @@ export default function FinancialsPage() {
 
   // Payroll needs the base currency too, to ask for an exchange rate when
   // the organization does not report in PKR.
+  const hrOn = useAddons().isOn('hr');
   const summary = useFinanceSummary(range, allowed && (tab === 'overview' || tab === 'payroll'));
 
   const contracts = useContracts({
@@ -199,7 +202,9 @@ export default function FinancialsPage() {
         <ExpenseList items={expenses.data?.items ?? []} loading={expenses.isLoading} />
       ) : null}
 
-      {tab === 'payroll' ? (
+      {tab === 'payroll' && !hrOn ? <AddonOffNotice name="HR" /> : null}
+
+      {tab === 'payroll' && hrOn ? (
         <PayrollPanel
           addOpen={addingPayrollPeople}
           onAddOpenChange={setAddingPayrollPeople}

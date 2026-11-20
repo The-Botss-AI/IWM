@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { getApi } from '@/lib/api';
 import { isDesktop } from '@/lib/desktop-runtime';
@@ -12,8 +12,10 @@ import { isDesktop } from '@/lib/desktop-runtime';
  *   1. Feature-detect serviceWorker + PushManager. Bail silently if
  *      either is missing (dev over HTTP, ancient browsers).
  *   2. Register `/sw.js` (idempotent - re-registers reuse the same SW).
- *   3. Ask the OS for notification permission. If the user dismissed
- *      it before, this is a no-op - we never spam them.
+ *   3. Require notification permission. It is never requested on mount:
+ *      browsers only honour the prompt from a user gesture, so the bell
+ *      offers an "Enable" button that calls `requestNotificationPermission`,
+ *      and this hook re-runs once permission changes.
  *   4. Pull an existing PushManager subscription if there is one;
  *      otherwise create one against the app's VAPID public key.
  *   5. POST `{ endpoint, auth, p256dh }` to the API. The API upserts
@@ -22,8 +24,40 @@ import { isDesktop } from '@/lib/desktop-runtime';
  * Failure modes are intentionally swallowed (with a console.warn) so
  * a push misconfiguration never breaks the app shell.
  */
+const PERMISSION_EVENT = 'botss:notification-permission';
+
+/** True when the browser can show notifications but the user hasn't decided yet. */
+export function canRequestNotificationPermission(): boolean {
+  return typeof Notification !== 'undefined' && Notification.permission === 'default';
+}
+
+/**
+ * Ask for OS notification permission. Call ONLY from a user gesture (a click
+ * handler); `useDesktopNotifications` picks up the result and subscribes.
+ */
+export async function requestNotificationPermission(): Promise<NotificationPermission | null> {
+  if (typeof Notification === 'undefined') return null;
+  let result: NotificationPermission = Notification.permission;
+  try {
+    result = await Notification.requestPermission();
+  } catch {
+    /* some browsers reject outside a user gesture */
+  }
+  window.dispatchEvent(new Event(PERMISSION_EVENT));
+  return result;
+}
+
 export function useDesktopNotifications(userId: string | null): void {
   const subscribedKey = useRef<string | null>(null);
+  // Bumped when permission changes via `requestNotificationPermission`, so the
+  // subscribe flow below re-runs right after the user grants it.
+  const [permissionTick, setPermissionTick] = useState(0);
+
+  useEffect(() => {
+    const onChange = () => setPermissionTick((n) => n + 1);
+    window.addEventListener(PERMISSION_EVENT, onChange);
+    return () => window.removeEventListener(PERMISSION_EVENT, onChange);
+  }, []);
 
   useEffect(() => {
     if (!userId) return;
@@ -35,19 +69,6 @@ export function useDesktopNotifications(userId: string | null): void {
     void (async () => {
       if (typeof window === 'undefined') return;
       if (typeof Notification === 'undefined') return;
-
-      // ALWAYS request permission first - even if VAPID isn't set,
-      // we want the in-app `Notification` fallback in
-      // `useChatNotifyingEffects` to be able to pop banners while
-      // the tab is in the background. Without this prompt, that
-      // fallback also stays silent.
-      if (Notification.permission === 'default') {
-        try {
-          await Notification.requestPermission();
-        } catch {
-          /* some browsers reject outside a user gesture */
-        }
-      }
 
       if (!('serviceWorker' in navigator)) return;
       if (Notification.permission !== 'granted') return;
@@ -119,7 +140,7 @@ export function useDesktopNotifications(userId: string | null): void {
     return () => {
       cancelled = true;
     };
-  }, [userId]);
+  }, [userId, permissionTick]);
 }
 
 /**

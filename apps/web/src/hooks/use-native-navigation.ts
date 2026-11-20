@@ -10,7 +10,7 @@ import { useEffect } from 'react';
  * event with the target URL; handling it here turns the tap into a client-side route change instead of a
  * full page load, which is both faster and avoids a fresh network round trip
  * right as the device wakes up. Cancelling the event tells the shell we took
- * it - left uncancelled (signed out, other origin), the shell falls back to a
+ * it. A chunk load failure during the push falls back to a full load. Left uncancelled (signed out, other origin), the shell falls back to a
  * full navigation. No-op in a plain browser, where nothing dispatches it.
  */
 export function useNativeNavigation(enabled: boolean): void {
@@ -30,7 +30,10 @@ export function useNativeNavigation(enabled: boolean): void {
       }
       if (target.origin !== window.location.origin) return;
       e.preventDefault();
-      router.push(`${target.pathname}${target.search}${target.hash}`);
+      const path = `${target.pathname}${target.search}${target.hash}`;
+      // If the route's code can't load (offline, or replaced by a deploy),
+      // Next falls back to a full load, and the error boundaries recover.
+      router.push(path);
     };
     window.addEventListener('botss:navigate', onNavigate);
     return () => window.removeEventListener('botss:navigate', onNavigate);

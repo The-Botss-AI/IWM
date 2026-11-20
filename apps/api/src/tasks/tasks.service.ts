@@ -33,7 +33,7 @@ export class TasksService {
     private readonly milestoneDelivery: MilestoneDeliveryService,
     // Optional so legacy tests / sandboxes that don't import ScopeModule
     // still construct TasksService. When absent we fall back to the
-    // pre-Phase-4 workspace-scoped behavior.
+    // workspace-scoped (header-bound) behavior.
     @Optional() private readonly workspaceScope?: WorkspaceScopeService,
   ) {}
 
@@ -74,7 +74,7 @@ export class TasksService {
   }
 
   async list(scope: UserScope, q: ListTasksQuery) {
-    // Phase 4 org-layer: if the caller asked for the aggregate view OR
+    // Organization layer: if the caller asked for the aggregate view OR
     // explicitly named a workspace, ask the scope service to resolve a
     // wider set than the header-bound one. The resolver verifies that
     // any requested workspace belongs to the caller's org and refuses
@@ -216,10 +216,6 @@ export class TasksService {
         ...(input.estimateHours !== undefined ? { estimateHours: input.estimateHours } : {}),
       },
     });
-
-    console.log(
-      `[TasksService] create: success, id=${created.id}, title=${created.title}, projectId=${created.projectId}, status=${created.status}`,
-    );
 
     // Notify the assignee (unless they assigned themselves).
     if (input.assigneeId && input.assigneeId !== userId) {

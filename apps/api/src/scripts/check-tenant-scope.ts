@@ -8,7 +8,8 @@
  * Covered: the tenant-scope helpers, milestones, expenses, payments, chat
  * member removal, channel creation, goals, todos, timesheets, lead conversion,
  * mail replies, custom-field values, LiveKit, the workspace-role guard,
- * workspaces, mailbox self-setup and the client-portal invite.
+ * workspaces, mailbox self-setup, the client-portal invite, webmail candidates,
+ * org-less bootstrap and public signup domain rules.
  *
  * Run: pnpm --filter @botss/api test
  */
@@ -25,6 +26,10 @@ import {
 } from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
 
+import { rawPrisma } from '@botss/database';
+
+import { AdminUsersService } from '../admin/admin-users.service';
+import { AuthService } from '../auth/auth.service';
 import { ChatService } from '../chat/chat.service';
 import { ClientPortalService } from '../clients/client-portal.service';
 import { WorkspaceRoleGuard } from '../common/guards/workspace-role.guard';
@@ -39,7 +44,9 @@ import { LeadsService } from '../leads/leads.service';
 import { LivekitService } from '../livekit/livekit.service';
 import { MailAccountsService } from '../mail/mail-accounts.service';
 import { MailSendService } from '../mail/mail-send.service';
+import { OrganizationAutoRouteService } from '../organizations/auto-route.service';
 import { ROOT_ORG_ID } from '../organizations/organizations.constants';
+import { OrganizationsService } from '../organizations/organizations.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import { TimesheetsService } from '../timesheets/timesheets.service';
 import { TodosService } from '../todos/todos.service';
@@ -1030,6 +1037,165 @@ async function main(): Promise<void> {
       'disabled account elsewhere is generic',
     );
     assert.deepEqual(r.writes, [], 'disabled-account refusal writes nothing');
+  }
+
+  // --- 12. webmail candidates are platform-only -------------------------------
+  {
+    const raw = rawPrisma as unknown as {
+      user: { findUnique: unknown };
+      userPermissionOverride: { findMany: unknown };
+    };
+    const original = { user: raw.user.findUnique, overrides: raw.userPermissionOverride.findMany };
+    // loadEffectivePermissions reads through rawPrisma: a tenant ADMIN.
+    raw.user.findUnique = async () => ({
+      systemRole: 'ADMIN',
+      organizationId: ORG_A,
+      customRole: null,
+    });
+    raw.userPermissionOverride.findMany = async () => [];
+    try {
+      let listEmailsCalls = 0;
+      const cpanel = {
+        isEnabled: () => true,
+        listEmails: async () => {
+          listEmailsCalls += 1;
+          return [{ email: 'boss@platform.test', quotaMb: 1, diskUsedBytes: 0 }];
+        },
+      };
+      const prisma = {
+        client: {
+          user: {
+            findUnique: async () => ({
+              systemRole: 'ADMIN',
+              organizationId: ORG_A,
+              organization: { isRoot: false },
+            }),
+            findMany: async () => [],
+          },
+        },
+      } as unknown as PrismaService;
+      const admin = new AdminUsersService(
+        prisma,
+        {} as never,
+        cpanel as never,
+        {} as never,
+        {} as never,
+      );
+      assert.deepEqual(
+        await admin.listWebmailCandidates(USER_A),
+        { items: [] },
+        'tenant admin gets no candidates',
+      );
+      assert.equal(listEmailsCalls, 0, 'tenant admin never makes cPanel list the mailboxes');
+    } finally {
+      raw.user.findUnique = original.user;
+      raw.userPermissionOverride.findMany = original.overrides;
+    }
+  }
+
+  // --- 13. org-less staff bootstrap is refused --------------------------------
+  {
+    const raw = rawPrisma as unknown as {
+      workspaceMembership: { findFirst: unknown };
+      user: { findUnique: unknown };
+      workspace: { findUnique: unknown; create: unknown };
+    };
+    const original = {
+      membership: raw.workspaceMembership.findFirst,
+      user: raw.user.findUnique,
+      wsFind: raw.workspace.findUnique,
+      wsCreate: raw.workspace.create,
+    };
+    const rawWrites: string[] = [];
+    raw.workspaceMembership.findFirst = async () => null;
+    raw.user.findUnique = async () => ({ organizationId: null });
+    raw.workspace.findUnique = async () => null;
+    raw.workspace.create = async () => {
+      rawWrites.push('workspace.create');
+      return { id: 'cmnewws' };
+    };
+    try {
+      // Verified STAFF user, org-less, on a domain no organization has verified.
+      const routePrisma = {
+        client: {
+          user: {
+            findUnique: async () => ({
+              organizationId: null,
+              accountType: 'STAFF',
+              emailVerified: true,
+            }),
+            updateMany: async () => {
+              rawWrites.push('user.updateMany');
+              return { count: 1 };
+            },
+          },
+          organizationDomain: { findFirst: async () => null },
+          organization: { findFirst: async () => null },
+        },
+      } as unknown as PrismaService;
+      const auth = new AuthService({} as never, new OrganizationAutoRouteService(routePrisma));
+      await assert.rejects(
+        auth.ensureBootstrapWorkspace(USER_NOORG, 'N', 'nobody@unclaimed.test'),
+        (e: unknown) =>
+          e instanceof ForbiddenException &&
+          (e.getResponse() as { code?: string }).code === 'no-organization',
+        'org-less staff refused with no-organization',
+      );
+      assert.deepEqual(rawWrites, [], 'refused bootstrap creates no workspace and routes nobody');
+    } finally {
+      raw.workspaceMembership.findFirst = original.membership;
+      raw.user.findUnique = original.user;
+      raw.workspace.findUnique = original.wsFind;
+      raw.workspace.create = original.wsCreate;
+    }
+  }
+
+  // --- 14. public signup domain rules -----------------------------------------
+  {
+    const prevCpanel = process.env.CPANEL_DOMAIN;
+    process.env.CPANEL_DOMAIN = 'platform.test';
+    try {
+      const orgWrites: string[] = [];
+      const prisma = {
+        client: {
+          organizationDomain: {
+            findFirst: async (args: { where: { verifiedDomain: string } }) =>
+              args.where.verifiedDomain === 'claimed.test' ? { organizationId: ORG_B } : null,
+          },
+          organization: { findFirst: async () => null },
+          $transaction: async () => {
+            orgWrites.push('$transaction');
+            return {};
+          },
+        },
+      } as unknown as PrismaService;
+      const orgs = new OrganizationsService(prisma, {} as never, {} as never, {} as never);
+      const domainRefused = (e: unknown): boolean =>
+        e instanceof ForbiddenException &&
+        (e.getResponse() as { code?: string }).code === 'email-domain-not-allowed';
+      await assert.rejects(
+        orgs.signupSelfServe({
+          organizationName: 'Acme',
+          name: 'N',
+          email: 'ceo@platform.test',
+        } as never),
+        domainRefused,
+        'signup on the cPanel domain refused',
+      );
+      await assert.rejects(
+        orgs.signupSelfServe({
+          organizationName: 'Acme',
+          name: 'N',
+          email: 'ceo@claimed.test',
+        } as never),
+        domainRefused,
+        'signup on a domain another org claimed refused',
+      );
+      assert.deepEqual(orgWrites, [], 'refused signup creates nothing');
+    } finally {
+      if (prevCpanel === undefined) delete process.env.CPANEL_DOMAIN;
+      else process.env.CPANEL_DOMAIN = prevCpanel;
+    }
   }
 
   console.log('check-tenant-scope: OK');

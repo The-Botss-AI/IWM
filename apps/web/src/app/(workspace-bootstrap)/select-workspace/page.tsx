@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PageLoader } from '@/components/ui/loader';
+import { WORKSPACE_MESSAGES } from '@/lib/loading-messages';
 import { QueryError } from '@/components/ui/query-error';
 import { getApi } from '@/lib/api';
 import { unregisterNativePush } from '@/hooks/use-native-push';
@@ -99,7 +100,11 @@ export default function SelectWorkspacePage() {
 
       {session.isLoading || workspaces.isLoading ? (
         <div className="border-line bg-bg-surface rounded-md border">
-          <PageLoader label="Loading workspaces" className="min-h-[12rem]" />
+          <PageLoader
+            label="Loading workspaces"
+            messages={WORKSPACE_MESSAGES}
+            className="min-h-[12rem]"
+          />
         </div>
       ) : workspaces.isError && !workspaces.data ? (
         <QueryError message="Couldn't load workspaces." onRetry={() => void workspaces.refetch()} />
