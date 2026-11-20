@@ -1,5 +1,7 @@
 import * as Sentry from '@sentry/node';
 
+import { redactSecretPaths } from '../support/support-rules';
+
 /**
  * Optional Sentry error reporting. Everything here is a complete no-op while
  * SENTRY_DSN is unset: no SDK init, no instrumentation, no network calls.
@@ -7,7 +9,8 @@ import * as Sentry from '@sentry/node';
  * Privacy: nothing user-authored may leave the host. Request bodies, cookies,
  * Authorization headers, query strings, mail/chat contents and email
  * addresses are stripped in `scrubEvent` / `scrubBreadcrumb`; only the user
- * id is kept.
+ * id is kept. Secrets carried in a path (calendar feed and RSVP tokens,
+ * invite codes, share slugs) are replaced by their name.
  */
 
 const REDACTED = '[redacted]';
@@ -25,14 +28,16 @@ export function isSentryEnabled(): boolean {
   return enabled;
 }
 
-/** Scrub one string: emails, bearer/basic credentials and query strings. */
+/** Scrub one string: emails, bearer/basic credentials, query strings and secret path segments. */
 export function scrubString(value: string): string {
   // Cap first: event strings are short, and this bounds the regex work.
-  return value
-    .slice(0, 2000)
-    .replace(BEARER, '$1 [redacted]')
-    .replace(EMAIL, '[email]')
-    .replace(QUERY, '$1');
+  return redactSecretPaths(
+    value
+      .slice(0, 2000)
+      .replace(BEARER, '$1 [redacted]')
+      .replace(EMAIL, '[email]')
+      .replace(QUERY, '$1'),
+  );
 }
 
 /** Deep scrub: redact sensitive keys and sanitize every string value. */

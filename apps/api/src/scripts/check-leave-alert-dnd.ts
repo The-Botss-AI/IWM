@@ -10,6 +10,10 @@
  *  - Web Push skips Do Not Disturb users as well (subscription lookup and send);
  *  - calls are the exception: a DND user gets a silent "Call from <name>" push
  *    on both legs (no sound, silent channel, silent flag), others ring as before;
+ *  - meeting reminders (data.type 'meeting-reminder') ring through Do Not
+ *    Disturb on every leg: sound, the `meeting-reminders` channel, high
+ *    priority, Join/Snooze data, a Web Push banner that needs interaction;
+ *    any other data type stays silenced;
  *  - call pushes expire after 30 seconds; a call is "ringing" only for a
  *    non-caller participant while it is unanswered;
  *  - users without Do Not Disturb still get the push, and a failed
@@ -330,7 +334,85 @@ async function main(): Promise<void> {
   });
   await tick();
   assert.equal(webSentTo.length, 0, 'Web Push non-call stays skipped for DND users');
+
+  // Meeting reminders ring through Do Not Disturb (a user decision), on
+  // every leg; nothing else does.
+  const reminderData = {
+    type: 'meeting-reminder',
+    meetingId: 'cmmeeting0000000000000001',
+    occurrenceStart: '2026-11-23T05:00:00.000Z',
+    meetingUrl: 'https://meet.google.com/abc-defg-hij',
+    snooze: { deliveryId: 'cmdelivery000000000000001', minutes: 5 },
+  };
+  const reminderPayload = {
+    title: 'Standup in 10 minutes',
+    body: 'Mon, 23 Nov 2026, 10:00 - 10:30 (Asia/Karachi)',
+    type: 'generic' as const,
+    url: '/meetings/cmmeeting0000000000000001',
+    data: reminderData,
+  };
+  reset();
+  await push.sendDesktopNotification('dnd-user', reminderPayload);
+  await tick();
+  assert.deepEqual(
+    webSentTo,
+    ['https://fcm.googleapis.com/fcm/send/dnd-user'],
+    'Web Push rings a meeting reminder for a DND user',
+  );
+  assert.equal(webBodies[0]?.requireInteraction, true, 'the reminder banner stays until acted on');
+  assert.equal(webBodies[0]?.silent, undefined, 'the reminder is not silent');
+  assert.deepEqual(
+    (webBodies[0]?.data as Record<string, unknown> | undefined)?.snooze,
+    reminderData.snooze,
+    'Web Push carries the snooze target',
+  );
+  reset();
+  await push.sendDesktopNotification('dnd-user', {
+    ...reminderPayload,
+    data: { ...reminderData, type: 'meeting-invite' },
+  });
+  await tick();
+  assert.equal(webSentTo.length, 0, 'any other data type stays silenced under DND');
   (push as unknown as { enabled: boolean }).enabled = false;
+
+  reset();
+  await push.sendDesktopNotificationToUsers(['dnd-user', 'plain-user'], reminderPayload);
+  await tick();
+  assert.equal(sentTo.length, 2, 'phones ring the meeting reminder for DND and other users alike');
+  for (const m of sentTo as Array<
+    (typeof sentTo)[number] & { priority?: string; categoryId?: string }
+  >) {
+    assert.equal(m.sound, 'default', 'meeting reminder has sound');
+    assert.equal(m.channelId, 'meeting-reminders', 'meeting reminder uses its own Android channel');
+    assert.equal(m.priority, 'high', 'meeting reminder is high priority');
+    assert.equal(
+      m.categoryId,
+      'meeting-reminder',
+      'meeting reminder category gives Join and Snooze',
+    );
+    assert.equal(m.data?.type, 'meeting-reminder', 'the app can tell a meeting reminder');
+    assert.equal(m.data?.meetingUrl, reminderData.meetingUrl, 'Join opens the meeting link');
+    assert.equal(m.data?.silent, undefined, 'never flagged silent');
+  }
+
+  // Through the bell: the row is written and the push carries the data.
+  reset();
+  await service.emit({
+    userId: 'dnd-user',
+    type: 'MEETING_REMINDER',
+    title: 'Standup in 10 minutes',
+    body: 'b',
+    entityType: 'meeting',
+    entityId: reminderData.meetingId,
+    url: reminderPayload.url,
+    pushData: reminderData,
+    requireInteraction: true,
+  });
+  await tick();
+  assert.deepEqual(created, ['dnd-user'], 'meeting reminder bell row written');
+  assert.equal(sentTo.length, 1, 'meeting reminder pushed to a DND phone');
+  assert.equal(sentTo[0]?.data?.snooze !== undefined, true, 'snooze reaches the phone');
+  assert.equal(sentTo[0]?.data?.notificationId, 'n-dnd-user', 'the bell row id still rides along');
 
   reset();
   await push.sendDesktopNotification('dnd-user', callPayload);

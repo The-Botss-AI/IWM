@@ -4,6 +4,7 @@ import {
   Compass,
   Building2,
   CalendarCheck,
+  CalendarClock,
   CalendarRange,
   Clock,
   FileText,
@@ -100,6 +101,14 @@ const ITEMS: NavItem[] = [
     description: 'Manage chat preferences, rooms, and channels.',
     icon: MessageSquare,
     group: 'workspace',
+  },
+  {
+    href: '/settings/meetings',
+    label: 'Meetings',
+    description: 'Default reminders and your private calendar link.',
+    icon: CalendarClock,
+    group: 'workspace',
+    addon: 'meetings',
   },
   {
     href: '/settings/mail',

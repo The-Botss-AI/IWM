@@ -104,4 +104,42 @@ assert.equal(tx.transaction, 'GET /api/v1/mail');
 assert.equal(tx.spans[0]!.data, undefined);
 assert.ok(!JSON.stringify(tx).includes('SECRET'));
 
+// Secrets in paths (calendar feed and RSVP tokens, invite codes) never leave.
+const feedToken = 'F'.repeat(43);
+const rsvpToken = 'R'.repeat(43);
+assert.equal(
+  scrubString(`GET /api/v1/meetings/feed/${feedToken}.ics failed`),
+  'GET /api/v1/meetings/feed/:token failed',
+);
+assert.equal(
+  scrubString(`https://portal.example/api/v1/public/meetings/rsvp/${rsvpToken}?response=accepted`),
+  'https://portal.example/api/v1/public/meetings/rsvp/:token',
+);
+assert.equal(
+  scrubString(`opened /meetings/rsvp/${rsvpToken} twice`),
+  'opened /meetings/rsvp/:token twice',
+);
+assert.equal(
+  scrubString('POST /api/v1/chat/invites/abc123 refused'),
+  'POST /api/v1/chat/invites/:code refused',
+);
+const tokenEvent = scrubEvent({
+  message: `feed failed /api/v1/meetings/feed/${feedToken}.ics`,
+  transaction: `GET /api/v1/meetings/feed/${feedToken}.ics`,
+  request: { method: 'GET', url: `https://portal.example/api/v1/meetings/feed/${feedToken}.ics` },
+  exception: { values: [{ value: `not found /api/v1/public/meetings/rsvp/${rsvpToken}` }] },
+  breadcrumbs: [
+    {
+      category: 'http',
+      message: `GET /api/v1/meetings/feed/${feedToken}.ics`,
+      data: { url: `/api/v1/meetings/feed/${feedToken}.ics` },
+    },
+  ],
+});
+const tokenDump = JSON.stringify(tokenEvent);
+assert.ok(
+  !tokenDump.includes(feedToken) && !tokenDump.includes(rsvpToken),
+  'tokens in paths are redacted',
+);
+
 console.log('check-sentry-scrub: ok');

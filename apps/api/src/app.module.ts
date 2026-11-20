@@ -33,6 +33,7 @@ import { PayrollModule } from './payroll/payroll.module';
 import { LeadsModule } from './leads/leads.module';
 import { LivekitModule } from './livekit/livekit.module';
 import { MailModule } from './mail/mail.module';
+import { MeetingsModule } from './meetings/meetings.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PortalModule } from './portal/portal.module';
 import { DomainsModule } from './organizations/domains.module';
@@ -124,6 +125,7 @@ export const APP_SCHEDULE_OPTIONS = scheduleOptionsForRole(getProcessRole());
     LivekitModule,
     TodosModule,
     TimesheetsModule,
+    MeetingsModule,
     CalendarModule,
     HrModule,
   ],

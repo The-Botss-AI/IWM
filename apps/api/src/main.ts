@@ -18,6 +18,7 @@ try {
 // apps/api/.env or the runtime environment if that path doesn't exist. Done before
 // any other imports that read process.env (Better Auth secret, etc.).
 import { config as loadDotenv } from 'dotenv';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -379,6 +380,52 @@ async function bootstrap(): Promise<void> {
   expressApp.use(`/${apiPrefix}/public/forms`, publicFormsLimiter);
   // Signing links: session lookups, PDF fetches, sign and decline.
   expressApp.use(`/${apiPrefix}/public/signatures`, publicContentLimiter);
+
+  // Meetings, login-free: RSVP links in guest emails and the private calendar
+  // feed (calendar apps poll it). The token is the credential (256-bit,
+  // hashed at rest); these cap probing and polling per IP. The .ics import is
+  // authenticated but parses up to 2 MB per request, so it gets its own bound.
+  const meetingRsvpLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { title: 'Too many requests. Try again later.', status: 429 },
+    skip: (req) => req.method === 'OPTIONS',
+  });
+  expressApp.use(`/${apiPrefix}/public/meetings`, meetingRsvpLimiter);
+  // The feed is polled by calendar services (Google, Apple, Outlook) that
+  // fetch every subscriber's feed from a few shared IPs, so a tight per-IP
+  // cap would starve everyone behind them. Each feed gets its own bucket
+  // (keyed by a hash of its path, so the token itself is not kept), and the
+  // per-IP cap is only an outer bound against token probing.
+  const meetingFeedLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 20,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { title: 'Too many requests. Try again later.', status: 429 },
+    skip: (req) => req.method === 'OPTIONS',
+    keyGenerator: (req) => `feed:${createHash('sha256').update(req.path).digest('hex')}`,
+  });
+  const meetingFeedIpLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 600,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { title: 'Too many requests. Try again later.', status: 429 },
+    skip: (req) => req.method === 'OPTIONS',
+  });
+  expressApp.use(`/${apiPrefix}/meetings/feed`, meetingFeedIpLimiter, meetingFeedLimiter);
+  const meetingImportLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 30,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { title: 'Too many imports. Try again later.', status: 429 },
+    skip: (req) => req.method !== 'POST',
+  });
+  expressApp.use(`/${apiPrefix}/meetings/import`, meetingImportLimiter);
 
   // Client portal: authenticated, but used by people outside the company, so
   // it gets an outer bound of its own. Looser than the public routes because

@@ -203,6 +203,13 @@ enum NotificationType {
   // shared a form with you to fill in.
   FORM_SUBMITTED
   FORM_SHARED
+  // Meetings (2026-11): you were invited, a meeting you are in changed or
+  // was cancelled, someone answered your invite, or a reminder fired.
+  MEETING_INVITE
+  MEETING_UPDATED
+  MEETING_CANCELLED
+  MEETING_RSVP
+  MEETING_REMINDER
 }
 
 enum MailAccountStatus {
@@ -567,6 +574,13 @@ model User {
   /// Appearance + navigation settings that follow the user across devices.
   preferences UserPreferences?
 
+  /// Meetings: organized, attended, own reminders and the private calendar
+  /// feed token.
+  organizedMeetings  Meeting[]         @relation("MeetingOrganizer")
+  meetingAttendances MeetingAttendee[] @relation("MeetingAttendeeUser")
+  meetingReminders   MeetingReminder[] @relation("MeetingReminderUser")
+  meetingFeedToken   MeetingFeedToken? @relation("MeetingFeedTokenUser")
+
   // `email` is @unique; its unique index serves every lookup.
   @@index([deletedAt])
   @@index([organizationId])
@@ -744,6 +758,7 @@ model Organization {
   supportGrants  SupportGrant[]          @relation("OrganizationSupportGrants")
   addons         OrganizationAddon[]     @relation("OrganizationAddons")
   domains        OrganizationDomain[]    @relation("OrganizationDomains")
+  meetings       Meeting[]               @relation("OrganizationMeetings")
 
   // `slug` is @unique; no separate index.
   @@index([isRoot])
@@ -942,6 +957,7 @@ model Workspace {
   forms               Form[]
   formSubmissions     FormSubmission[]
   formUploads         FormUpload[]
+  meetings            Meeting[]                @relation("WorkspaceMeetings")
 
   @@index([ownerId])
   // `slug` is @unique; no separate index.
@@ -1019,6 +1035,7 @@ model Project {
   invoices    Invoice[]           @relation("InvoiceProject")
   contracts   Contract[]          @relation("ContractProject")
   expenses    Expense[]           @relation("ExpenseProject")
+  meetings    Meeting[]           @relation("ProjectMeetings")
 
   @@unique([workspaceId, key])
   @@index([workspaceId])
@@ -1221,6 +1238,7 @@ model Lead {
   createdBy         User      @relation("LeadCreator", fields: [createdById], references: [id])
   assignee          User?     @relation("LeadAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
   convertedToClient Client?   @relation("LeadConversion", fields: [convertedToClientId], references: [id], onDelete: SetNull)
+  meetings          Meeting[] @relation("LeadMeetings")
 
   @@index([workspaceId])
   @@index([assigneeId])
@@ -1278,6 +1296,7 @@ model Client {
   /// Documents filed under this client (Document.clientId). Filing is not
   /// sharing: the portal only sees DocumentClientShare / DocumentAccess.
   documents      Document[]
+  meetings       Meeting[]             @relation("ClientMeetings")
 
   @@index([workspaceId])
   @@index([assigneeId])
@@ -3329,4 +3348,198 @@ model UserPermissionOverride {
 
   @@index([userId])
   @@index([workspaceId])
+}
+
+// ============================================================================
+// Meetings (2026-11)
+// ============================================================================
+
+enum MeetingStatus {
+  CONFIRMED
+  TENTATIVE
+  CANCELLED
+}
+
+/// Where a meeting came from: made in the app, or imported from an .ics file.
+enum MeetingSource {
+  MANUAL
+  ICS
+}
+
+/// An attendee's answer (iCalendar PARTSTAT).
+enum MeetingResponse {
+  NEEDS_ACTION
+  ACCEPTED
+  TENTATIVE
+  DECLINED
+}
+
+/// A meeting: one occurrence, or a recurring series (`rrule`). Visible ONLY
+/// to its organizer and the people added to it (`MeetingAttendee.userId`),
+/// and only inside `organizationId`. There is deliberately no workspace-wide,
+/// org-admin or platform-admin read path; every read composes
+/// `meetingVisibleWhere` in apps/api/src/meetings/meeting-rules.ts.
+///
+/// All instants are UTC. `timeZone` (IANA) anchors the recurrence (so a 09:00
+/// series stays at 09:00 across DST) and the dates of an all-day meeting,
+/// which starts at 00:00 in that zone. Soft-deleted.
+model Meeting {
+  id             String        @id @default(cuid())
+  organizationId String
+  /// Workspace the meeting was created from. Context only: never grants
+  /// visibility to that workspace's members.
+  workspaceId    String?
+  organizerId    String
+  title          String
+  description    String?
+  location       String?
+  /// http(s) only.
+  meetingUrl     String?
+  /// The first occurrence (DTSTART), UTC.
+  startsAt       DateTime
+  endsAt         DateTime
+  allDay         Boolean       @default(false)
+  timeZone       String
+  /// RRULE value without the `RRULE:` prefix; null for a one-off meeting.
+  rrule          String?
+  /// End of the last occurrence, overrides included; null for a series that
+  /// never ends. Lets range queries skip finished series.
+  lastEndsAt     DateTime?
+  /// Original starts of occurrences removed from the series (EXDATE), UTC.
+  exdates        DateTime[]    @default([])
+  status         MeetingStatus @default(CONFIRMED)
+  color          String?
+  source         MeetingSource @default(MANUAL)
+  /// iCalendar UID. Generated for app meetings; kept from the file on import
+  /// so a re-import updates instead of duplicating.
+  icsUid         String
+  /// iCalendar SEQUENCE: bumped on every change attendees must see.
+  sequence       Int           @default(0)
+  leadId         String?
+  clientId       String?
+  projectId      String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization        @relation("OrganizationMeetings", fields: [organizationId], references: [id], onDelete: Cascade)
+  workspace    Workspace?          @relation("WorkspaceMeetings", fields: [workspaceId], references: [id], onDelete: SetNull)
+  organizer    User                @relation("MeetingOrganizer", fields: [organizerId], references: [id], onDelete: Cascade)
+  lead         Lead?               @relation("LeadMeetings", fields: [leadId], references: [id], onDelete: SetNull)
+  client       Client?             @relation("ClientMeetings", fields: [clientId], references: [id], onDelete: SetNull)
+  project      Project?            @relation("ProjectMeetings", fields: [projectId], references: [id], onDelete: SetNull)
+  attendees    MeetingAttendee[]
+  overrides    MeetingOccurrence[]
+  reminders    MeetingReminder[]
+
+  // One row per UID per organizer: the dedupe key for .ics re-imports.
+  @@unique([organizerId, icsUid])
+  @@index([organizationId, startsAt])
+  @@index([workspaceId])
+  @@index([leadId])
+  @@index([clientId])
+  @@index([projectId])
+  @@index([deletedAt])
+}
+
+/// A person added to a meeting. Internal attendees (`userId` set) are STAFF
+/// of the meeting's organization and see the meeting in the app; external
+/// attendees are an email address with a login-free RSVP link. Removing an
+/// attendee deletes the row (and with it their reminders' visibility).
+model MeetingAttendee {
+  id            String          @id @default(cuid())
+  meetingId     String
+  userId        String?
+  /// Lowercased. For an internal attendee, their address when added.
+  email         String
+  name          String?
+  response      MeetingResponse @default(NEEDS_ACTION)
+  respondedAt   DateTime?
+  /// External attendees only: sha256 of the RSVP link token (never the raw
+  /// token, never logged).
+  rsvpTokenHash String?         @unique
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user    User?   @relation("MeetingAttendeeUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, email])
+  @@unique([meetingId, userId])
+  @@index([userId])
+}
+
+/// One changed occurrence of a recurring meeting (RECURRENCE-ID). Text fields
+/// left null inherit the series; an empty string clears the field for this
+/// occurrence. A cancelled occurrence is an `exdates` entry instead.
+model MeetingOccurrence {
+  id            String   @id @default(cuid())
+  meetingId     String
+  /// The occurrence's start in the series before the change, UTC.
+  originalStart DateTime
+  startsAt      DateTime
+  endsAt        DateTime
+  title         String?
+  description   String?
+  location      String?
+  meetingUrl    String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, originalStart])
+}
+
+/// A person's own reminder for a meeting (every occurrence of a series).
+model MeetingReminder {
+  id            String    @id @default(cuid())
+  meetingId     String
+  userId        String
+  minutesBefore Int
+  /// When this reminder next rings (occurrence start - minutesBefore), UTC;
+  /// null when it never will (meeting over, cancelled, declined). Written
+  /// with every change to the meeting, the reminder or the answer, and after
+  /// each ring; the reminder cron selects on it.
+  nextFireAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  meeting    Meeting                   @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user       User                      @relation("MeetingReminderUser", fields: [userId], references: [id], onDelete: Cascade)
+  deliveries MeetingReminderDelivery[]
+
+  @@unique([meetingId, userId, minutesBefore])
+  @@index([userId])
+  @@index([nextFireAt])
+}
+
+/// A reminder that fired for one occurrence. The unique key is the claim:
+/// the reminder cron inserts the row before it notifies, so each reminder
+/// fires once per occurrence even with two workers. A snooze sets
+/// `snoozedUntil`; the cron claims it again through `snoozeFiredAt`.
+model MeetingReminderDelivery {
+  id              String    @id @default(cuid())
+  reminderId      String
+  occurrenceStart DateTime
+  firedAt         DateTime  @default(now())
+  snoozedUntil    DateTime?
+  snoozeFiredAt   DateTime?
+
+  reminder MeetingReminder @relation(fields: [reminderId], references: [id], onDelete: Cascade)
+
+  @@unique([reminderId, occurrenceStart])
+  @@index([snoozedUntil])
+}
+
+/// A person's private calendar subscription link
+/// (`/api/v1/meetings/feed/<token>.ics`). Only the sha256 of the token is
+/// stored; regenerating replaces the row, revoking deletes it.
+model MeetingFeedToken {
+  id         String    @id @default(cuid())
+  userId     String    @unique
+  tokenHash  String    @unique
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+
+  user User @relation("MeetingFeedTokenUser", fields: [userId], references: [id], onDelete: Cascade)
 }

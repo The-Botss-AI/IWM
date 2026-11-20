@@ -11,7 +11,16 @@ import { z } from 'zod';
  * is how organizations created before add-ons keep everything working with no
  * admin action and no data migration.
  */
-export const ADDON_KEYS = ['mail', 'cpanel', 'polar', 'twilio', 'livekit', 'hr', 'ai'] as const;
+export const ADDON_KEYS = [
+  'mail',
+  'cpanel',
+  'polar',
+  'twilio',
+  'livekit',
+  'hr',
+  'meetings',
+  'ai',
+] as const;
 export const addonKeySchema = z.enum(ADDON_KEYS);
 export type AddonKey = z.infer<typeof addonKeySchema>;
 
@@ -39,6 +48,7 @@ const emailValue = z.string().trim().toLowerCase().email().max(255);
 export const mailAddonSettingsSchema = z.object({}).strict();
 export const cpanelAddonSettingsSchema = z.object({}).strict();
 export const aiAddonSettingsSchema = z.object({}).strict();
+export const meetingsAddonSettingsSchema = z.object({}).strict();
 
 export const polarAddonSettingsSchema = z
   .object({
@@ -106,6 +116,7 @@ export const ADDON_SETTINGS_SCHEMAS = {
   twilio: twilioAddonSettingsSchema,
   livekit: livekitAddonSettingsSchema,
   hr: hrAddonSettingsSchema,
+  meetings: meetingsAddonSettingsSchema,
   ai: aiAddonSettingsSchema,
 } as const satisfies Record<AddonKey, z.ZodType>;
 

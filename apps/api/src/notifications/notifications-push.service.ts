@@ -3,6 +3,8 @@ import { BadRequestException, ConflictException, Injectable, Logger } from '@nes
 import {
   type DesktopPushPayload,
   isAllowedPushEndpoint,
+  MEETING_REMINDER_ANDROID_CHANNEL,
+  MEETING_REMINDER_PUSH_TYPE,
   parseStoredUserPreferences,
   type RegisterPushDeviceInput,
   type SubscribePushInput,
@@ -17,6 +19,15 @@ function safeEqual(a: string, b: string): boolean {
   const x = Buffer.from(a);
   const y = Buffer.from(b);
   return x.length === y.length && timingSafeEqual(x, y);
+}
+
+/**
+ * A meeting reminder: the one push that rings through Do Not Disturb (a
+ * user decision: missing a meeting costs more than one sound). Marked by
+ * `data.type`, which only the meetings reminder cron sets.
+ */
+export function isMeetingReminderPush(payload: DesktopPushPayload): boolean {
+  return payload.data?.['type'] === MEETING_REMINDER_PUSH_TYPE;
 }
 
 function ownedElsewhere(): ConflictException {
@@ -168,11 +179,16 @@ export class NotificationsPushService {
    */
   async sendDesktopNotificationToUsers(
     userIds: readonly string[],
-    payload: DesktopPushPayload,
+    input: DesktopPushPayload,
   ): Promise<{ sent: number; dropped: number }> {
     const ids = Array.from(new Set(userIds));
     if (ids.length === 0) return { sent: 0, dropped: 0 };
     const who = ids.length === 1 ? `userId=${ids[0]}` : `users=${ids.length}`;
+    // A meeting reminder stays on screen until the user acts on it.
+    const meetingReminder = isMeetingReminderPush(input);
+    const payload: DesktopPushPayload = meetingReminder
+      ? { ...input, requireInteraction: true }
+      : input;
     // Live leg: the same payload to the users' connected sockets, which is
     // how the desktop app raises its banners (Electron has no push service).
     // Published here so it fires for exactly the events phones get a push
@@ -184,10 +200,11 @@ export class NotificationsPushService {
       this.logger.warn(`live push fan-out failed ${who}: ${(err as Error)?.message ?? 'unknown'}`);
     }
     // Do Not Disturb silences every push leg (phones and browsers) except
-    // calls, which still arrive as a silent "Call from <name>" notification.
+    // calls, which still arrive as a silent "Call from <name>" notification,
+    // and meeting reminders, which ring as usual (no DND lookup at all).
     // The live socket leg above stays unfiltered: the client applies DND to
-    // its own banners and sounds.
-    const silenced = await this.doNotDisturbUserIds(ids);
+    // its own banners and sounds (and lets meeting reminders through).
+    const silenced = meetingReminder ? new Set<string>() : await this.doNotDisturbUserIds(ids);
     const isCall = payload.type === 'call';
     const loud = ids.filter((id) => !silenced.has(id));
     const quiet = isCall ? ids.filter((id) => silenced.has(id)) : [];
@@ -247,7 +264,7 @@ export class NotificationsPushService {
               keys: { auth: sub.auth, p256dh: sub.p256dh },
             },
             quietSet.has(sub.userId) ? quietBody : loudBody,
-            { TTL: payload.type === 'call' ? 30 : 120 },
+            { TTL: payload.type === 'call' ? 30 : meetingReminder ? 300 : 120 },
           );
           sent += 1;
         } catch (err) {
@@ -371,6 +388,24 @@ export class NotificationsPushService {
     if (valid.length === 0) return;
 
     const silent = payload.silent === true;
+    if (isMeetingReminderPush(payload)) {
+      // Meeting reminders: always with sound, high priority, on their own
+      // high-importance channel; the `meeting-reminder` category gives the
+      // Join and Snooze actions (registered by the mobile shell).
+      const reminders: ExpoPushMessage[] = valid.map((d) => ({
+        to: d.token,
+        title: payload.title,
+        body: payload.body,
+        sound: 'default',
+        priority: 'high',
+        channelId: MEETING_REMINDER_ANDROID_CHANNEL,
+        categoryId: 'meeting-reminder',
+        ttl: 300,
+        data: { url: payload.url, ...(payload.data ?? {}) },
+      }));
+      await this.sendExpoMessages(reminders, valid, who);
+      return;
+    }
     const messages: ExpoPushMessage[] = valid.map((d) => ({
       to: d.token,
       title: payload.title,
@@ -391,7 +426,15 @@ export class NotificationsPushService {
         : {}),
       data: { url: payload.url, ...(payload.data ?? {}), ...(silent ? { silent: true } : {}) },
     }));
+    await this.sendExpoMessages(messages, valid, who);
+  }
 
+  /** Send prepared Expo messages (one per device in `valid`, same order), pruning dead tokens. */
+  private async sendExpoMessages(
+    messages: ExpoPushMessage[],
+    valid: readonly { id: string; token: string }[],
+    who: string,
+  ): Promise<void> {
     const chunks = this.expo.chunkPushNotifications(messages);
     let cursor = 0;
     for (const chunk of chunks) {

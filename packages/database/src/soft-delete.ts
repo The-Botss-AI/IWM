@@ -49,6 +49,9 @@ const SOFT_DELETE_MODELS = new Set<string>([
   // FormAccess and FormUpload hang off these and are never soft-deleted alone.
   'Form',
   'FormSubmission',
+  // Meetings. Attendees, occurrence overrides, reminders and their deliveries
+  // hang off a meeting and are hard-deleted on their own.
+  'Meeting',
 ]);
 
 const isSoftDeleteModel = (model: string | undefined): boolean =>

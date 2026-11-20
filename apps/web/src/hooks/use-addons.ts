@@ -27,6 +27,7 @@ const DEFAULT_ON: Record<AddonKey, boolean> = {
   twilio: true,
   livekit: true,
   hr: true,
+  meetings: true,
   ai: false,
 };
 

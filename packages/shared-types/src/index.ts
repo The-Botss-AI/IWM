@@ -64,6 +64,7 @@ export * from './addons.js';
 export * from './notification-subscription.js';
 
 export * from './todo.js';
+export * from './meeting.js';
 export * from './timesheet.js';
 export * from './calendar.js';
 

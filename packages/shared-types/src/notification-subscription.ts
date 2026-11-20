@@ -94,6 +94,8 @@ export const desktopPushPayloadSchema = z.object({
   data: z.record(z.string(), z.unknown()).optional(),
   /// Do Not Disturb call: show the banner with no sound, vibration or ring.
   silent: z.boolean().optional(),
+  /// Keep the banner up until the user acts on it (meeting reminders).
+  requireInteraction: z.boolean().optional(),
 });
 export type DesktopPushPayload = z.infer<typeof desktopPushPayloadSchema>;
 

@@ -31,12 +31,13 @@ IWM replaces a stack of separate tools (chat, tasks, docs, CRM, invoicing, mail,
 - **Leads and clients**: pipeline stages and follow-ups, client hub, client portal with shared documents and signature requests.
 - **Invoices and finance**: invoice templates rendered to PDF, contracts, milestones, payments, expenses, payment sources.
 - **Communication**: channels, DMs and group chats with reactions and replies, presence, notifications on every device, LiveKit voice/video calls and screen share. Calls still reach people in Do Not Disturb, silently.
+- **Meetings**: schedule meetings with weekly, monthly or yearly repeats, attendees from the team or by email, a video link, reminders and RSVP. Guests get an email invite with an ICS file and one-click Yes/Maybe/No links, you can import `.ics` files, and each person gets a private calendar feed URL for Google, Apple or Outlook calendars. Reminders ring in Do Not Disturb.
 - **Forms**: a form builder with 40+ field types (choices, ratings, file and image uploads, signatures, addresses, locations, matrices, repeaters, calculated fields), conditional logic, public share links with an optional Cloudflare Turnstile bot check, and a responses view.
 - **Mail**: per-user IMAP/SMTP accounts with signatures.
 - **Documents and files**: rich-text editor (Tiptap), revisions, shareable public links, object storage for uploads.
 - **HR**: attendance, leave (HR is alerted to new requests), holidays, timesheets, payroll with payslips.
 - **Organizations and access**: multi-organization tenancy, email domains verified through DNS, role-based and attribute-based permissions (CASL), audit log, time-limited support access, security alerts, device sessions with "remember me".
-- **Add-ons**: each organization switches optional modules (mail, cPanel mailboxes, video calls, HR) on or off and keeps their settings, encrypted. Switched-off features are hidden.
+- **Add-ons**: each organization switches optional modules (mail, cPanel mailboxes, video calls, HR, meetings) on or off and keeps their settings, encrypted. Switched-off features are hidden.
 - **Search**: PostgreSQL full-text search with Slack-style filters such as `in:#channel`, `from:@person`, `has:file`.
 - **Error monitoring (optional)**: Sentry for the API, worker and web app, with personal data scrubbed before anything is sent.
 
@@ -127,9 +128,9 @@ To run one app only: `pnpm dev --filter=@botss/web` or `pnpm dev --filter=@botss
 
 This release only adds to the schema; there are no drops or renames, so no data is lost:
 
-- new tables `OrganizationAddon`, `OrganizationDomain`, `Form`, `FormVersion`, `FormAccess`, `FormSubmission`, `FormUpload`,
+- new tables `OrganizationAddon`, `OrganizationDomain`, `Form`, `FormVersion`, `FormAccess`, `FormSubmission`, `FormUpload`, `Meeting`, `MeetingAttendee`, `MeetingOccurrence`, `MeetingReminder`, `MeetingReminderDelivery`, `MeetingFeedToken`,
 - new nullable `Account` columns `accessTokenExpiresAt`, `refreshTokenExpiresAt`, `scope`,
-- new enum values `LEAVE_REQUESTED`, `FORM_SUBMITTED`, `FORM_SHARED`.
+- new enum values `LEAVE_REQUESTED`, `FORM_SUBMITTED`, `FORM_SHARED`, `MEETING_INVITE`, `MEETING_UPDATED`, `MEETING_CANCELLED`, `MEETING_RSVP`, `MEETING_REMINDER`.
 
 Migrations are not in the repo, so create the one for this change yourself, then restart the API and worker.
 
@@ -477,7 +478,7 @@ If your mail runs on cPanel, set all five `CPANEL_*` vars, `MAIL_DEFAULT_IMAP_HO
 
 ### Add-ons
 
-Organization admins switch optional modules on or off in Settings > Add-ons: Mail, cPanel mailboxes, video and voice calls (an organization can use its own LiveKit server) and HR (leave, attendance, payroll, timesheet warnings and the payslip signatory). Everything is on by default except the reserved AI add-on. Switched-off features disappear from the apps and their API routes refuse requests. Add-on secrets are stored encrypted with `MAIL_ENCRYPTION_KEY`. Polar, Twilio and AI are listed but not available yet.
+Organization admins switch optional modules on or off in Settings > Add-ons: Mail, cPanel mailboxes, video and voice calls (an organization can use its own LiveKit server), HR (leave, attendance, payroll, timesheet warnings and the payslip signatory) and Meetings (the `meetings` add-on: scheduling, reminders, ICS import and a personal calendar feed). Guest invites and RSVP links need outgoing mail to be set up; meeting reminders ring even in Do Not Disturb. Everything is on by default except the reserved AI add-on. Switched-off features disappear from the apps and their API routes refuse requests. Add-on secrets are stored encrypted with `MAIL_ENCRYPTION_KEY`. Polar, Twilio and AI are listed but not available yet.
 
 ### Email domains
 

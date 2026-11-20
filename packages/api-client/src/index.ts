@@ -16,6 +16,7 @@ import { InvoicesResource } from './resources/invoices.js';
 import { LeadsResource } from './resources/leads.js';
 import { LivekitResource } from './resources/livekit.js';
 import { MailResource } from './resources/mail.js';
+import { MeetingsResource, PublicMeetingsResource } from './resources/meetings.js';
 import { NotificationsResource } from './resources/notifications.js';
 import { OrganizationsResource } from './resources/organizations.js';
 import { PortalResource } from './resources/portal.js';
@@ -82,6 +83,9 @@ export interface BotssApiClient {
   todos: TodosResource;
   timesheets: TimesheetsResource;
   calendar: CalendarResource;
+  meetings: MeetingsResource;
+  /** Login-free RSVP page for meeting guests. */
+  publicMeetings: PublicMeetingsResource;
   organizations: OrganizationsResource;
   auditLog: AuditLogResource;
   /** Support access grants and platform operator support sessions. */
@@ -135,6 +139,8 @@ export function createClient(opts: ClientOptions): BotssApiClient {
     todos: new TodosResource(http),
     timesheets: new TimesheetsResource(http),
     calendar: new CalendarResource(http),
+    meetings: new MeetingsResource(http),
+    publicMeetings: new PublicMeetingsResource(http),
     organizations: new OrganizationsResource(http),
     auditLog: new AuditLogResource(http),
     support: new SupportResource(http),

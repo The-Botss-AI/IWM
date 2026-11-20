@@ -86,7 +86,15 @@ const ROOT_ADMIN = 'cmrootadmin00000000000000';
 const MEMBER_A = 'cmmembera0000000000000000';
 const SUPER = 'cmsuper000000000000000000';
 
-const CURRENT_ADDONS: AddonKey[] = ['mail', 'cpanel', 'polar', 'twilio', 'livekit', 'hr'];
+const CURRENT_ADDONS: AddonKey[] = [
+  'mail',
+  'cpanel',
+  'polar',
+  'twilio',
+  'livekit',
+  'hr',
+  'meetings',
+];
 
 // ---------------------------------------------------------------- fake db
 

@@ -80,7 +80,7 @@ let untaggedNotificationSeq = 0;
 /** A ringing call banner is closed after this; the call has timed out by then. */
 const CALL_BANNER_MAX_MS = 60_000;
 
-type NotifyType = 'message' | 'call' | 'generic';
+type NotifyType = 'message' | 'call' | 'meeting-reminder' | 'generic';
 interface NotifyArgs {
   title: string;
   body: string;
@@ -99,7 +99,8 @@ function parseNotifyArgs(raw: unknown): NotifyArgs | null {
   const r = raw as Record<string, unknown>;
   const title = cappedString(r.title, 200);
   if (!title) return null;
-  const type = r.type === 'call' || r.type === 'message' ? r.type : 'generic';
+  const type =
+    r.type === 'call' || r.type === 'message' || r.type === 'meeting-reminder' ? r.type : 'generic';
   return {
     title,
     body: cappedString(r.body, 500) ?? '',
@@ -170,6 +171,7 @@ function showNotification(args: NotifyArgs): void {
     ? path.join(process.resourcesPath, 'icon.png')
     : path.join(__dirname, '..', 'build', 'icon.png');
   const isCall = args.type === 'call';
+  const isReminder = args.type === 'meeting-reminder';
   const n = new Notification({
     title: args.title,
     body: args.body,
@@ -177,6 +179,11 @@ function showNotification(args: NotifyArgs): void {
     // A ringing call stays on screen until answered or dismissed, like the
     // phone's call notification (Windows/Linux; macOS uses its own setting).
     ...(isCall ? { timeoutType: 'never' as const, urgency: 'critical' as const } : {}),
+    // A meeting reminder stays up with sound until clicked or dismissed, and
+    // is not closed when the window gains focus (unlike call banners).
+    ...(isReminder
+      ? { timeoutType: 'never' as const, urgency: 'critical' as const, silent: false }
+      : {}),
   });
 
   const key = args.tag ?? `untagged:${(untaggedNotificationSeq += 1)}`;

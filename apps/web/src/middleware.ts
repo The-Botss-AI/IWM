@@ -46,7 +46,7 @@ function buildCsp(nonce: string): string {
 /**
  * Top-level segments of the authenticated `(app)` and `(workspace-bootstrap)`
  * route groups. Everything else (auth pages, /p, /sign, /f, /forms, /invitations,
- * /download, /portal, /design-system) stays public here and keeps its own
+ * /download, /portal, /design-system, /meetings/rsvp) stays public here and keeps its own
  * gate.
  */
 const PROTECTED_SEGMENTS = new Set([
@@ -62,6 +62,7 @@ const PROTECTED_SEGMENTS = new Set([
   'invoices',
   'leads',
   'mail',
+  'meetings',
   'projects',
   'search',
   'settings',
@@ -108,6 +109,8 @@ function authRedirect(request: NextRequest): NextResponse | null {
   if (pathname === '/') {
     return NextResponse.redirect(new URL(signedIn ? '/home' : '/sign-in', request.url));
   }
+  // The emailed RSVP link for outside guests is public: no sign in.
+  if (pathname === '/meetings/rsvp' || pathname.startsWith('/meetings/rsvp/')) return null;
   const segment = pathname.split('/')[1] ?? '';
   if (!PROTECTED_SEGMENTS.has(segment) || signedIn) return null;
   const url = new URL('/sign-in', request.url);

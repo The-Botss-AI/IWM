@@ -35,6 +35,11 @@ export const notificationType = z.enum([
   'LEAVE_REQUESTED',
   'FORM_SUBMITTED',
   'FORM_SHARED',
+  'MEETING_INVITE',
+  'MEETING_UPDATED',
+  'MEETING_CANCELLED',
+  'MEETING_RSVP',
+  'MEETING_REMINDER',
 ]);
 export type NotificationType = z.infer<typeof notificationType>;
 
@@ -61,6 +66,7 @@ export const notificationEntityType = z.enum([
   'signature',
   'chat_request',
   'form',
+  'meeting',
 ]);
 export type NotificationEntityType = z.infer<typeof notificationEntityType>;
 

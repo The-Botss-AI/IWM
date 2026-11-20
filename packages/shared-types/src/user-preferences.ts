@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { MAX_MEETING_REMINDERS, reminderMinutesSchema } from './meeting.js';
+
 /* eslint-disable @typescript-eslint/no-redeclare */
 
 /**
@@ -75,10 +77,24 @@ export const notificationPreferencesSchema = z.object({
 });
 export type NotificationPreferences = z.infer<typeof notificationPreferencesSchema>;
 
+/** Settings -> Meetings. Lives on the server: the API applies the defaults
+ *  to meetings the user creates or is invited to. */
+export const meetingPreferencesSchema = z.object({
+  /** Reminders (minutes before the start) added for every new meeting.
+   *  Deduplicated and ascending; an empty list means none. */
+  defaultReminders: z
+    .array(reminderMinutesSchema)
+    .max(MAX_MEETING_REMINDERS)
+    .transform((list) => [...new Set(list)].sort((a, b) => a - b))
+    .optional(),
+});
+export type MeetingPreferences = z.infer<typeof meetingPreferencesSchema>;
+
 export const userPreferencesSchema = z.object({
   appearance: appearancePreferencesSchema.optional(),
   navigation: navigationPreferencesSchema.optional(),
   notifications: notificationPreferencesSchema.optional(),
+  meetings: meetingPreferencesSchema.optional(),
 });
 export type UserPreferences = z.infer<typeof userPreferencesSchema>;
 
@@ -140,6 +156,9 @@ export function parseStoredUserPreferences(raw: unknown): UserPreferences {
 
   const notifications = pickValid(notificationPreferencesSchema.shape, doc.notifications);
   if (Object.keys(notifications).length > 0) out.notifications = notifications;
+
+  const meetings = pickValid(meetingPreferencesSchema.shape, doc.meetings);
+  if (Object.keys(meetings).length > 0) out.meetings = meetings;
 
   return out;
 }

@@ -3,6 +3,10 @@
 import {
   Bell,
   BellRing,
+  CalendarCheck,
+  CalendarClock,
+  CalendarPlus,
+  CalendarX,
   CheckCheck,
   CheckSquare,
   MessageSquare,
@@ -85,12 +89,18 @@ export function NotificationBell({
         id: `srv:${n.id}`,
         rawId: n.id,
         source: 'server',
-        kind: n.type === 'TASK_COMMENT' ? 'comment' : 'task',
+        kind: bellKind(n.type),
         title: n.title,
         body: n.body,
         // Prefer the explicit deep-link (set for all the cross-app
         // notification types); fall back to the task link, then dashboard.
-        url: n.url ?? (n.taskId ? `/tasks/${n.taskId}` : '/dashboard'),
+        url:
+          n.url ??
+          (n.entityType === 'meeting' && n.entityId
+            ? `/meetings/${n.entityId}`
+            : n.taskId
+              ? `/tasks/${n.taskId}`
+              : '/dashboard'),
         createdAt: n.createdAt.getTime(),
         readAt: n.readAt ? n.readAt.getTime() : null,
         actorImage: n.actor?.image ?? null,
@@ -343,11 +353,38 @@ export function NotificationBell({
   );
 }
 
+type MeetingBellKind =
+  | 'meeting-invite'
+  | 'meeting-update'
+  | 'meeting-cancelled'
+  | 'meeting-rsvp'
+  | 'meeting-reminder';
+
+/** Icon kind of a server notification row. */
+function bellKind(type: string): UnifiedRow['kind'] {
+  switch (type) {
+    case 'TASK_COMMENT':
+      return 'comment';
+    case 'MEETING_INVITE':
+      return 'meeting-invite';
+    case 'MEETING_UPDATED':
+      return 'meeting-update';
+    case 'MEETING_CANCELLED':
+      return 'meeting-cancelled';
+    case 'MEETING_RSVP':
+      return 'meeting-rsvp';
+    case 'MEETING_REMINDER':
+      return 'meeting-reminder';
+    default:
+      return 'task';
+  }
+}
+
 interface UnifiedRow {
   id: string;
   rawId: string;
   source: 'server' | 'client';
-  kind: 'task' | 'comment' | InAppNotification['kind'];
+  kind: 'task' | 'comment' | MeetingBellKind | InAppNotification['kind'];
   title: string;
   body: string;
   url: string;
@@ -375,6 +412,16 @@ function NotificationRow({ row, selectMode, selected, onClick }: RowProps) {
         return MessageSquare;
       case 'call-missed':
         return PhoneMissed;
+      case 'meeting-invite':
+        return CalendarPlus;
+      case 'meeting-cancelled':
+        return CalendarX;
+      case 'meeting-rsvp':
+        return CalendarCheck;
+      case 'meeting-reminder':
+        return BellRing;
+      case 'meeting-update':
+        return CalendarClock;
       case 'task':
       case 'comment':
       default:

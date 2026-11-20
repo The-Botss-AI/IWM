@@ -198,6 +198,21 @@ const hr: AddonDefinition<'hr'> = {
   },
 };
 
+const meetings: AddonDefinition<'meetings'> = {
+  key: 'meetings',
+  name: 'Meetings',
+  description:
+    'Meetings with internal and external attendees, reminders, calendar invitations, .ics import and a private calendar feed.',
+  defaultEnabled: true,
+  fields: [],
+  settingsHref: null,
+  // Invitations to external guests use the system mail path; everything else needs no settings.
+  status: () => ({
+    configured: true,
+    reason: 'Works with no settings. Guest invitations are emailed from the system mailbox.',
+  }),
+};
+
 const ai: AddonDefinition<'ai'> = {
   key: 'ai',
   name: 'AI assistants',
@@ -215,6 +230,7 @@ export const ADDON_REGISTRY: { [K in AddonKey]: AddonDefinition<K> } = {
   twilio,
   livekit,
   hr,
+  meetings,
   ai,
 };
 

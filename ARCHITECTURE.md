@@ -220,3 +220,18 @@ Sentry for the API, the worker and the web app, switched on only by a DSN
 (`SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_DSN`). Without one no SDK is loaded and
 nothing is sent. Events are scrubbed before they leave the server or the
 browser: no emails, tokens, cookies, request bodies or query strings, only ids.
+
+---
+
+## 15. Meetings (Built, add-on)
+
+Meetings live in `apps/api/src/meetings` and the `meetings` add-on. Repeating
+meetings (weekly, monthly, yearly) are stored as one rule and expanded into
+occurrences inside a bounded window; moving or cancelling a single occurrence
+is kept as an override. Attendees are team members or guests by email. Guests
+receive an invite with an ICS file and signed RSVP links that need no sign-in,
+so they depend on outgoing mail. Reminders are scheduled from the next fire
+time by a cron in the worker and delivered as notifications that ring on every
+device, including in Do Not Disturb. `.ics` files can be imported, and each
+person has a private, revocable calendar feed URL that is rate limited and
+redacted from error reports.

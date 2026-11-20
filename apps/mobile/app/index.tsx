@@ -82,7 +82,10 @@ Notifications.setNotificationHandler({
     shouldShowBanner: true,
     shouldShowList: true,
     // Silent calls (Do Not Disturb) never play a sound, even in the foreground.
-    shouldPlaySound: notification.request.content.data?.silent !== true,
+    // Meeting reminders always ring, even when the app would stay quiet.
+    shouldPlaySound:
+      notification.request.content.data?.type === 'meeting-reminder' ||
+      notification.request.content.data?.silent !== true,
     shouldSetBadge: false,
   }),
 });
@@ -133,6 +136,44 @@ function readDecline(
   return { id: resp.notification.request.identifier, callId };
 }
 
+/** What a Join or Snooze tap on a meeting reminder refers to, or null. */
+function readMeetingAction(resp: Notifications.NotificationResponse | null | undefined): {
+  id: string;
+  action: 'join' | 'snooze';
+  deliveryId: string | null;
+  meetingUrl: string | null;
+  url: string | null;
+} | null {
+  if (!resp) return null;
+  if (resp.actionIdentifier !== 'join' && resp.actionIdentifier !== 'snooze') return null;
+  const data = resp.notification.request.content.data;
+  if (data?.type !== 'meeting-reminder') return null;
+  const snooze: unknown = data.snooze;
+  const deliveryId =
+    typeof snooze === 'object' &&
+    snooze !== null &&
+    typeof (snooze as { deliveryId?: unknown }).deliveryId === 'string'
+      ? (snooze as { deliveryId: string }).deliveryId
+      : null;
+  const rawMeeting: unknown = data.meetingUrl;
+  const meetingUrl =
+    typeof rawMeeting === 'string' && /^https?:\/\//i.test(rawMeeting) ? rawMeeting : null;
+  return {
+    id: resp.notification.request.identifier,
+    action: resp.actionIdentifier,
+    deliveryId,
+    meetingUrl,
+    url: toAppUrl(data.url),
+  };
+}
+
+/** The app URL with `?snooze=<deliveryId>`, which the page turns into a snooze call. */
+function withSnooze(url: string, deliveryId: string): string {
+  const u = new URL(url);
+  u.searchParams.set('snooze', deliveryId);
+  return u.toString();
+}
+
 /** Remove presented notifications for a call that is over. */
 async function dismissCallNotifications(callId: string): Promise<void> {
   try {
@@ -171,6 +212,7 @@ export default function HomeScreen() {
   const pendingUrl = useRef<string | null>(null);
   // Declines tapped while the WebView is not ready; sent once it is.
   const pendingDeclines = useRef(new Set<string>());
+  const pendingSnoozes = useRef(new Set<string>());
   // Cold start and the response listener can both report the tap that
   // launched the app; remember which ones were handled.
   const handledTaps = useRef(new Set<string>());
@@ -337,6 +379,45 @@ export default function HomeScreen() {
     );
   }, []);
 
+  // Hand a meeting Snooze to the web app, which calls the API as the signed-in
+  // user (the shell has no session token). Queued on window like declines.
+  const snoozeMeeting = useCallback((deliveryId: string) => {
+    const id = JSON.stringify(deliveryId);
+    webRef.current?.injectJavaScript(
+      `(function(){(window.__BOTSS_MEETING_SNOOZES__=window.__BOTSS_MEETING_SNOOZES__||[]).push(${id});` +
+        `window.dispatchEvent(new CustomEvent('botss:meeting-snooze',{detail:{deliveryId:${id}}}));})();true;`,
+    );
+  }, []);
+
+  // Join / Snooze taps on a meeting reminder.
+  const handleMeetingAction = useCallback(
+    (m: NonNullable<ReturnType<typeof readMeetingAction>>): void => {
+      // The tap leaves the delivered notification in the tray; clear it.
+      void Notifications.dismissNotificationAsync(m.id).catch(() => undefined);
+      if (m.action === 'join') {
+        if (m.meetingUrl) {
+          void Linking.openURL(m.meetingUrl);
+        } else if (m.url) {
+          if (webLoaded.current) {
+            navigateTo(m.url);
+          } else {
+            pendingUrl.current = m.url;
+            if (loadFailed.current) retryLoad();
+          }
+        }
+        return;
+      }
+      if (!m.deliveryId) return;
+      if (webLoaded.current) {
+        snoozeMeeting(m.deliveryId);
+      } else {
+        pendingSnoozes.current.add(m.deliveryId);
+        if (loadFailed.current) retryLoad();
+      }
+    },
+    [navigateTo, retryLoad, snoozeMeeting],
+  );
+
   // A Decline tap: send it now if the page is loaded, else hold it for onLoad.
   // Either way the notification goes away.
   const handleDecline = useCallback(
@@ -375,6 +456,23 @@ export default function HomeScreen() {
       .then((resp) => {
         // A Decline that launched the app: decline, but load the home page,
         // not the call.
+        const meeting = readMeetingAction(resp);
+        if (meeting) {
+          handledTaps.current.add(meeting.id);
+          void Notifications.dismissNotificationAsync(meeting.id).catch(() => undefined);
+          if (meeting.action === 'join' && meeting.meetingUrl) {
+            void Linking.openURL(meeting.meetingUrl);
+            start(null);
+          } else if (meeting.action === 'join') {
+            start(meeting.url);
+          } else if (meeting.deliveryId) {
+            // Cold start: the first load carries ?snooze= for the page to handle.
+            start(withSnooze(meeting.url ?? APP_URL, meeting.deliveryId));
+          } else {
+            start(null);
+          }
+          return;
+        }
         const decline = readDecline(resp);
         if (decline) {
           handledTaps.current.add(decline.id);
@@ -395,6 +493,14 @@ export default function HomeScreen() {
 
     // Tap while the app is running (foreground/background).
     const sub = Notifications.addNotificationResponseReceivedListener((resp) => {
+      const meeting = readMeetingAction(resp);
+      if (meeting) {
+        if (handledTaps.current.has(meeting.id)) return;
+        handledTaps.current.add(meeting.id);
+        handleMeetingAction(meeting);
+        return;
+      }
+      if (resp.actionIdentifier === 'join' || resp.actionIdentifier === 'snooze') return;
       const decline = readDecline(resp);
       if (decline) {
         if (handledTaps.current.has(decline.id)) return;
@@ -420,7 +526,7 @@ export default function HomeScreen() {
       clearTimeout(fallback);
       sub.remove();
     };
-  }, [handleDecline, navigateTo, retryLoad, sendPushToken]);
+  }, [handleDecline, handleMeetingAction, navigateTo, retryLoad, sendPushToken]);
 
   // Coming back to the foreground on a failed load (e.g. the network was off
   // while backgrounded) retries straight away.
@@ -483,7 +589,9 @@ export default function HomeScreen() {
     }
     for (const callId of pendingDeclines.current) declineCall(callId);
     pendingDeclines.current.clear();
-  }, [announceCapabilities, clearRetry, declineCall, navigateTo, sendPushToken]);
+    for (const deliveryId of pendingSnoozes.current) snoozeMeeting(deliveryId);
+    pendingSnoozes.current.clear();
+  }, [announceCapabilities, clearRetry, declineCall, navigateTo, sendPushToken, snoozeMeeting]);
 
   const onError = useCallback(() => {
     webLoaded.current = false;

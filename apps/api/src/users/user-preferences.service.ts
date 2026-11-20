@@ -31,6 +31,10 @@ export function mergeUserPreferences(
   if (Object.keys(navigation).length > 0) out.navigation = navigation;
   const notifications = { ...base.notifications, ...patch.notifications };
   if (Object.keys(notifications).length > 0) out.notifications = notifications;
+  // Default meeting reminders: the list is replaced, never concatenated.
+  const meetings = { ...base.meetings, ...patch.meetings };
+  if (meetings.defaultReminders) meetings.defaultReminders = [...meetings.defaultReminders];
+  if (Object.keys(meetings).length > 0) out.meetings = meetings;
   return out;
 }
 
