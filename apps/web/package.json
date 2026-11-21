@@ -64,7 +64,7 @@
     "livekit-client": "^2.19.0",
     "lowlight": "^3.3.0",
     "lucide-react": "^0.468.0",
-    "next": "^15.5.28",
+    "next": "^15.5.29",
     "pdfjs-dist": "^4.10.38",
     "react": "^19.0.0",
     "react-day-picker": "^10.0.0",
