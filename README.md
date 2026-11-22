@@ -4,6 +4,21 @@ An open-source, self-hostable all-in-one workspace for teams. It covers projects
 
 IWM is a TypeScript monorepo: a NestJS API, a Next.js web app, an Electron desktop shell and an Expo mobile app, all sharing Zod schemas and a typed API client. See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together.
 
+<p align="center">
+  <img src="docs/screenshots/project-board.png" alt="Project board with tasks in columns" width="49%">
+  <img src="docs/screenshots/chat-channel.png" alt="Chat channel with messages" width="49%">
+</p>
+<p align="center">
+  <img src="docs/screenshots/calendar-week.png" alt="Calendar week view with meetings" width="49%">
+  <img src="docs/screenshots/invoice-detail.png" alt="Invoice detail with line items and preview" width="49%">
+</p>
+<p align="center">
+  <img src="docs/screenshots/leads-pipeline.png" alt="Leads pipeline" width="49%">
+  <img src="docs/screenshots/document-editor.png" alt="Document editor" width="49%">
+</p>
+
+*Screenshots show the fictional demo seed.*
+
 ## Table of contents
 
 1. [What IWM is](#1-what-iwm-is)
@@ -201,7 +216,7 @@ IWM can run as a public live demo that anyone can sign in to. Demo mode is for a
    0 3 * * * cd /srv/iwm-demo && docker compose --profile app --profile demo run --rm demo-reset >> /var/log/iwm-demo-reset.log 2>&1
    ```
 
-   Without Docker, run `pnpm demo:reset --yes-delete-all-demo-data` instead. The reset empties every table except `_prisma_migrations`, deletes every object in `S3_BUCKET` and runs the seed again. It refuses to run unless `DEMO_MODE=true`, the flag is passed and every user in the database has an `example.com` address (or one on the domain of `DEMO_LOGIN_EMAIL`).
+   Without Docker, run `pnpm demo:reset --yes-delete-all-demo-data` instead. The reset empties every table except `_prisma_migrations`, deletes every object in `S3_BUCKET` and runs the seed again. It refuses to run unless `DEMO_MODE=true`, the flag is passed, `DEMO_S3_BUCKET` is set to the same value as `S3_BUCKET`, every user in the database has an `example.com` address or is exactly `DEMO_LOGIN_EMAIL`, and no organization exists besides the root one and the seeded demo organization.
 
 What demo mode changes:
 
