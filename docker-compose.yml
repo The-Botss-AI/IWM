@@ -31,6 +31,9 @@ x-iwm-image: &iwm-image
       NEXT_PUBLIC_SENTRY_ENVIRONMENT: ${NEXT_PUBLIC_SENTRY_ENVIRONMENT:-}
       NEXT_PUBLIC_SENTRY_RELEASE: ${NEXT_PUBLIC_SENTRY_RELEASE:-}
       NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE: ${NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE:-}
+      NEXT_PUBLIC_DEMO_MODE: ${NEXT_PUBLIC_DEMO_MODE:-}
+      NEXT_PUBLIC_DEMO_LOGIN_EMAIL: ${NEXT_PUBLIC_DEMO_LOGIN_EMAIL:-}
+      NEXT_PUBLIC_DEMO_LOGIN_PASSWORD: ${NEXT_PUBLIC_DEMO_LOGIN_PASSWORD:-}
 
 services:
   postgres:
@@ -160,6 +163,9 @@ services:
     user: root
     environment:
       DATABASE_URL: postgresql://botss:botss@postgres:5432/botss?schema=public
+      # The shared login a public demo seeds (README, "Run a public demo").
+      DEMO_LOGIN_EMAIL: ${DEMO_LOGIN_EMAIL:-}
+      DEMO_LOGIN_PASSWORD: ${DEMO_LOGIN_PASSWORD:-}
     volumes:
       # Shares the migrations folder (and any local ones) with `pnpm quickstart`.
       - ./packages/database/prisma:/repo/packages/database/prisma
@@ -241,6 +247,31 @@ services:
       start_period: 10s
     depends_on:
       api:
+        condition: service_healthy
+
+  # Public live demo only (DEMO_MODE=true in .env): deletes ALL data and
+  # files, then seeds the demo again. Never on a real install; the script
+  # refuses without DEMO_MODE and on a database with non-demo users. Run it
+  # from a host cron at a fixed UTC time, see "Run a public demo" in the README:
+  #   docker compose --profile app --profile demo run --rm demo-reset
+  demo-reset:
+    <<: *iwm-image
+    profiles: [demo]
+    container_name: botss-demo-reset
+    restart: 'no'
+    working_dir: /repo/apps/api
+    command:
+      - /repo/node_modules/.bin/tsx
+      - src/scripts/demo-reset.ts
+      - --yes-delete-all-demo-data
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://botss:botss@postgres:5432/botss?schema=public
+      S3_ENDPOINT: http://minio:9000
+    depends_on:
+      postgres:
         condition: service_healthy
 
   livekit:

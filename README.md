@@ -186,6 +186,31 @@ Docker and `pnpm quickstart` share the same database and migration history, so y
 docker compose exec api cat /secrets/better-auth-secret /secrets/mail-encryption-key
 ```
 
+### Run a public demo
+
+IWM can run as a public live demo that anyone can sign in to. Demo mode is for a separate, throwaway server only. **Never turn it on for a real install**: the nightly reset deletes every row and every uploaded file.
+
+1. Use a separate server (or VM) and its own subdomain, for example `demo.example.com`, with its own database, Redis and bucket. Never share them with a real install.
+2. Set the demo values before building:
+   - root `.env`: `DEMO_MODE=true`, plus `DEMO_LOGIN_EMAIL` and `DEMO_LOGIN_PASSWORD` for the shared login (default `admin@example.com` / `demo-admin-password`);
+   - web build (`apps/web/.env.local`, or the same `.env` for Docker): `NEXT_PUBLIC_DEMO_MODE=true` and `NEXT_PUBLIC_DEMO_LOGIN_EMAIL` / `NEXT_PUBLIC_DEMO_LOGIN_PASSWORD` with the same login. They are compiled into the web app, so rebuild after changing them.
+3. Start it as usual (`docker compose --profile app up -d --build`). The `db-setup` step seeds the demo organization: five people, two projects with tasks on every board column, an active sprint, leads at each stage, two clients, an invoice with line items, chat channels with messages, documents, a form with responses, upcoming meetings with reminders and a week of time entries. All people and companies are fictional and use `example.com` addresses.
+4. Reset it every night at a fixed UTC time from the host's cron, for example at 03:00 UTC:
+
+   ```cron
+   0 3 * * * cd /srv/iwm-demo && docker compose --profile app --profile demo run --rm demo-reset >> /var/log/iwm-demo-reset.log 2>&1
+   ```
+
+   Without Docker, run `pnpm demo:reset --yes-delete-all-demo-data` instead. The reset empties every table except `_prisma_migrations`, deletes every object in `S3_BUCKET` and runs the seed again. It refuses to run unless `DEMO_MODE=true`, the flag is passed and every user in the database has an `example.com` address (or one on the domain of `DEMO_LOGIN_EMAIL`).
+
+What demo mode changes:
+
+- The web app shows a small "Live demo. Data resets every day." notice and prefills the sign in form with the demo login.
+- Nothing leaves the server: system mail (invitations, invoices, payslips, signature requests, meeting invites), mailbox sending, push notifications to phones and browsers and cPanel calls are skipped and logged. In-app notifications still appear.
+- These actions answer `403` with the problem code `demo-mode`, and the app shows why in a toast: adding, importing or inviting people (team members, client portal users, meeting guests outside the demo), changing a demo account's password, role, name, photo or sessions, deleting the organization, a workspace or people, mail accounts and sending mail, add-on, mail and domain settings, support access, calendar feed links, public document and form links, uploads over 1 MB, and uploads once the demo holds 200 MB of files.
+- Rate limits stay on and get stricter: 5 sign in attempts per 15 minutes and 60 changes per minute per IP.
+- Everything else (projects, tasks, sprints, chat, documents, leads, clients, invoices with PDFs, forms, meetings, time tracking) works as usual.
+
 ### Set up with an AI coding agent
 
 Copy the prompt below into any AI coding agent or chat assistant (Claude Code, Cursor, Copilot, ChatGPT and so on). An agent that can run commands will do the setup for you. A chat assistant will give you the commands for your operating system to run yourself.
@@ -264,7 +289,7 @@ The same steps by hand, if you prefer to see each one or use your own PostgreSQL
    pnpm db:seed:dev
    ```
 
-   The seed creates the root platform organization, a demo organization, a workspace, a sample project and one admin.
+   The seed creates the root platform organization and a demo organization with five fictional people, two projects with tasks and a sprint, leads, clients, an invoice, chat channels, documents, a form, upcoming meetings and time entries. Only the admin can sign in.
 
 6. Run everything with `pnpm dev` and sign in as above.
 
@@ -579,6 +604,7 @@ pnpm db:migrate --name x  # prisma migrate dev: new migration after changing sch
 pnpm db:migrate:deploy    # apply the shipped migrations (never prompts, never resets)
 pnpm db:push              # push schema.prisma without a migration
 pnpm db:seed:dev          # demo data (development only)
+pnpm demo:reset --yes-delete-all-demo-data   # public demo server only: wipe and reseed
 pnpm db:studio            # Prisma Studio
 pnpm clean                # remove build output
 ```

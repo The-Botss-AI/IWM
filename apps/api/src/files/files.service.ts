@@ -27,6 +27,12 @@ import type {
 import { isSafeInlineImage } from '@botss/shared-types';
 import type { AppAbility } from '@botss/auth';
 
+import {
+  DEMO_MAX_STORAGE_BYTES,
+  DEMO_MAX_UPLOAD_BYTES,
+  demoModeForbidden,
+  isDemoMode,
+} from '../common/demo-mode';
 import { abilityRow } from '../common/permissions/request-ability';
 import { isSupportRequest } from '../common/request-context';
 import { PrismaService } from '../prisma/prisma.service';
@@ -76,7 +82,7 @@ export function generalFileVisibility(financeAccess: boolean): Prisma.FileObject
   };
 }
 
-function createS3Client(endpoint: string): S3Client {
+export function createS3Client(endpoint: string): S3Client {
   return new S3Client({
     // Path-style addressing keeps MinIO + R2 happy with a single config; the
     // virtual-host style requires DNS routing that local dev doesn't have.
@@ -220,6 +226,28 @@ export class FilesService {
     return { ...file, sizeBytes: file.sizeBytes.toString() };
   }
 
+  /**
+   * A public demo (DEMO_MODE=true) takes small files only, and stops taking
+   * any once the uploads together reach the demo's storage cap. The size is
+   * signed into the upload URL, so a client cannot send more than it declared.
+   */
+  private async assertDemoUploadAllowed(sizeBytes: number): Promise<void> {
+    if (!isDemoMode()) return;
+    if (sizeBytes > DEMO_MAX_UPLOAD_BYTES) {
+      throw demoModeForbidden('Files larger than 1 MB cannot be uploaded in the live demo.');
+    }
+    const [files, formUploads] = await Promise.all([
+      this.prisma.client.fileObject.aggregate({ _sum: { sizeBytes: true } }),
+      this.prisma.client.formUpload.aggregate({ _sum: { sizeBytes: true } }),
+    ]);
+    const used = Number(files._sum.sizeBytes ?? 0n) + Number(formUploads._sum.sizeBytes ?? 0n);
+    if (used + sizeBytes > DEMO_MAX_STORAGE_BYTES) {
+      throw demoModeForbidden(
+        'The live demo has used its storage for today. Uploads open again after the nightly reset.',
+      );
+    }
+  }
+
   async presign(workspaceId: string, input: PresignUploadInput): Promise<PresignUploadResponse> {
     // Random key prefixed by workspace so a presigned URL can't be replayed
     // against another tenant's prefix even if the URL leaks. NOTE: reads are
@@ -228,6 +256,7 @@ export class FilesService {
     // Moving to signed reads needs every stored URL rewritten (tracked as a
     // separate project).
     if (input.sizeBytes > MAX_UPLOAD_BYTES) throw tooLarge();
+    await this.assertDemoUploadAllowed(input.sizeBytes);
     const id = randomBytes(9).toString('base64url');
     const safeName = input.filename.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80);
     const objectKey = `workspaces/${workspaceId}/${id}-${safeName}`;
@@ -414,6 +443,7 @@ export class FilesService {
     expiresIn?: number;
   }): Promise<{ uploadUrl: string; headers: Record<string, string>; expiresAt: Date }> {
     if (args.sizeBytes > MAX_UPLOAD_BYTES) throw tooLarge();
+    await this.assertDemoUploadAllowed(args.sizeBytes);
     const expiresIn = args.expiresIn ?? 600;
     const disposition = this.dispositionFor(args.filename, args.mimeType);
     try {

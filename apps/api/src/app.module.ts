@@ -15,6 +15,7 @@ import { CpanelModule } from './cpanel/cpanel.module';
 import { CommentsModule } from './comments/comments.module';
 import { CustomFieldsModule } from './custom-fields/custom-fields.module';
 import { AuthGuard } from './common/guards/auth.guard';
+import { DemoModeGuard } from './common/guards/demo-mode.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { ProblemDetailsExceptionFilter } from './common/filters/problem-details.filter';
 import { getProcessRole, scheduleOptionsForRole } from './common/process-role';
@@ -130,6 +131,8 @@ export const APP_SCHEDULE_OPTIONS = scheduleOptionsForRole(getProcessRole());
     HrModule,
   ],
   providers: [
+    // First: a public demo refuses some actions for everyone (DEMO_MODE=true).
+    { provide: APP_GUARD, useClass: DemoModeGuard },
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
     // After the two above: needs the resolved user and organization.

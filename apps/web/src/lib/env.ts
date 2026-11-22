@@ -20,4 +20,13 @@ export const env = {
   adminEmail: (process.env.NEXT_PUBLIC_ADMIN_EMAIL ?? '').trim().toLowerCase(),
   /** Prefilled IMAP/SMTP host when adding a mailbox (API: MAIL_DEFAULT_IMAP_HOST). */
   mailDefaultHost: (process.env.NEXT_PUBLIC_MAIL_DEFAULT_HOST ?? '').trim(),
+  /**
+   * Public live demo (API: DEMO_MODE). Shows the demo banner and the demo
+   * login on the sign in page. The API enforces what the demo turns off.
+   */
+  demoMode: (process.env.NEXT_PUBLIC_DEMO_MODE ?? '').trim().toLowerCase() === 'true',
+  /** Demo login shown and prefilled on the sign in page (API: DEMO_LOGIN_EMAIL). */
+  demoLoginEmail: (process.env.NEXT_PUBLIC_DEMO_LOGIN_EMAIL ?? '').trim(),
+  /** Its password (API: DEMO_LOGIN_PASSWORD). Public on purpose, demo only. */
+  demoLoginPassword: process.env.NEXT_PUBLIC_DEMO_LOGIN_PASSWORD ?? '',
 };

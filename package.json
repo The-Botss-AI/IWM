@@ -25,6 +25,7 @@
     "db:migrate": "dotenv -e .env -- pnpm --filter @botss/database run migrate",
     "db:migrate:deploy": "dotenv -e .env -- pnpm --filter @botss/database exec prisma migrate deploy",
     "db:migrate:status": "dotenv -e .env -- pnpm --filter @botss/database exec prisma migrate status",
+    "demo:reset": "dotenv -e .env -- pnpm --filter @botss/api exec tsx src/scripts/demo-reset.ts",
     "db:studio": "dotenv -e .env -- pnpm --filter @botss/database run studio",
     "db:seed:dev": "cross-env NODE_ENV=development ALLOW_SEED=true dotenv -e .env -- pnpm --filter @botss/database run seed",
     "db:push": "dotenv -e .env -- pnpm --filter @botss/database run push",

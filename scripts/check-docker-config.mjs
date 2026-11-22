@@ -19,6 +19,8 @@
  *      again, or quickstart / db-setup creating migrations instead of
  *      deploying them (and adopting older installs) through
  *      packages/database/scripts/schema-setup.mjs.
+ *   7. The public demo settings undocumented, or the demo reset losing its
+ *      profile or its safety checks.
  *
  * Plain Node, no dependencies. Run: node scripts/check-docker-config.mjs
  */
@@ -216,6 +218,41 @@ for (const [path, text] of [
     problems.push(
       `${path} runs \`prisma migrate dev\`; setup must only deploy shipped migrations.`,
     );
+  }
+}
+
+// 7. Public demo: the API and web flags are documented, the web build gets
+//    them (checked by 1), and the reset service keeps its safety rails.
+for (const name of ['DEMO_MODE', 'DEMO_LOGIN_EMAIL', 'DEMO_LOGIN_PASSWORD']) {
+  if (!new RegExp(`^${name}=`, 'm').test(envExample)) {
+    problems.push(`${name} is not documented in .env.example.`);
+  }
+}
+const webEnvExample = read('apps/web/.env.example');
+for (const name of [
+  'NEXT_PUBLIC_DEMO_MODE',
+  'NEXT_PUBLIC_DEMO_LOGIN_EMAIL',
+  'NEXT_PUBLIC_DEMO_LOGIN_PASSWORD',
+]) {
+  if (!new RegExp(`^${name}=`, 'm').test(webEnvExample)) {
+    problems.push(`${name} is not documented in apps/web/.env.example.`);
+  }
+}
+const demoReset = composeService(compose, 'demo-reset');
+if (!demoReset) {
+  problems.push('docker-compose.yml has no `demo-reset` service.');
+} else {
+  if (!/profiles: \[demo\]/.test(demoReset)) {
+    problems.push('The demo-reset service must stay behind the `demo` profile.');
+  }
+  if (!demoReset.includes('src/scripts/demo-reset.ts') || !demoReset.includes('postgres:5432')) {
+    problems.push('The demo-reset service must run src/scripts/demo-reset.ts against the compose Postgres.');
+  }
+}
+const resetScript = read('apps/api/src/scripts/demo-reset.ts');
+for (const needle of ['isDemoMode()', '--yes-delete-all-demo-data', '_prisma_migrations']) {
+  if (!resetScript.includes(needle)) {
+    problems.push(`apps/api/src/scripts/demo-reset.ts no longer contains "${needle}" (a safety check).`);
   }
 }
 

@@ -1,5 +1,6 @@
 import { isCancelledError } from '@tanstack/react-query';
 import { toast as sonnerToast } from 'sonner';
+import { DEMO_MODE_PROBLEM_CODE } from '@botss/shared-types';
 
 /**
  * The app's single entry point for transient feedback. Never import `sonner`
@@ -118,6 +119,11 @@ export function toastError(
   opts?: { onRetry?: () => void },
 ): void {
   if (isSilentError(err)) return;
+  // The live demo turned this action off: say so, with the server's reason.
+  if (isDemoModeError(err)) {
+    showError(DEMO_TITLE, { description: getErrorMessage(err) ?? undefined });
+    return;
+  }
   // Always give a reason: the server's words, a status based explanation, or
   // a generic line, so the user is never left with only "Couldn't do X".
   const message = getErrorMessage(err) ?? UNKNOWN_REASON;
@@ -125,6 +131,14 @@ export function toastError(
     description: message !== fallbackTitle ? message : undefined,
     onRetry: opts?.onRetry,
   });
+}
+
+const DEMO_TITLE = 'Not available in the live demo';
+
+/** A 403 the API sends in a public demo for actions it turns off. */
+function isDemoModeError(err: unknown): boolean {
+  const problem = (err as { problem?: { code?: unknown } } | null)?.problem;
+  return problem?.code === DEMO_MODE_PROBLEM_CODE;
 }
 
 /** True for aborted / cancelled requests - these are never surfaced to the user. */
