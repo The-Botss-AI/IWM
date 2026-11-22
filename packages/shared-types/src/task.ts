@@ -110,13 +110,13 @@ export type TaskDateField = z.infer<typeof TaskDateField>;
 export const listTasksQuerySchema = paginationQuerySchema
   .extend({
     projectId: cuid.optional(),
-    /// Phase 4 org-layer: optional explicit workspace filter. When present
+    /// Organization layer: optional explicit workspace filter. When present
     /// AND the caller is a member of the workspace's organization, the
     /// list narrows to that workspace. Omit to use the legacy current-
     /// workspace (header) scope, or pair with `aggregate='org'` to widen
     /// the view to every workspace in the caller's organization.
     workspaceId: cuid.optional(),
-    /// Phase 4 org-layer: when set to 'org', the list is aggregated
+    /// Organization layer: when set to 'org', the list is aggregated
     /// across all workspaces the caller's organization owns. Without it
     /// the legacy header-scoped behavior is preserved exactly.
     aggregate: z.enum(['org']).optional(),

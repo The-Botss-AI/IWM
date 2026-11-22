@@ -13,12 +13,14 @@ import {
   type UpdateMailSignatureInput,
 } from '@botss/shared-types';
 
+import { RequireAddon } from '../addons/require-addon.decorator';
 import { CurrentUser, type AuthedUser } from '../common/decorators/current-user.decorator';
 import { CurrentWorkspaceId } from '../common/decorators/current-workspace.decorator';
 import { SkipPermissions } from '../common/decorators/skip-permissions.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { MailAccountsService } from './mail-accounts.service';
 
+@RequireAddon('mail')
 @Controller('mail/accounts')
 export class MailAccountsController {
   constructor(private readonly accounts: MailAccountsService) {}

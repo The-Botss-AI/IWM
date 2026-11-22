@@ -1,6 +1,7 @@
 import { Controller, MessageEvent, Sse } from '@nestjs/common';
 import { map, type Observable } from 'rxjs';
 
+import { RequireAddon } from '../addons/require-addon.decorator';
 import { CurrentUser, type AuthedUser } from '../common/decorators/current-user.decorator';
 import { SkipPermissions } from '../common/decorators/skip-permissions.decorator';
 import { MailEventsService } from './mail-events.service';
@@ -12,6 +13,7 @@ import { MailEventsService } from './mail-events.service';
  * one-way (server → client) and SSE goes through standard HTTP + cookies
  * with no extra handshake.
  */
+@RequireAddon('mail')
 @Controller('mail/events')
 export class MailEventsController {
   constructor(private readonly events: MailEventsService) {}

@@ -1,120 +1,112 @@
 'use client';
 
-import { ChevronLeft, ChevronRight, Clock, FileText, ListChecks } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FileUp, Plus } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import type { CalendarEvent, CalendarEventType } from '@botss/shared-types';
 
+import { CalendarAgenda } from '@/components/calendar/calendar-agenda';
+import { EventChip } from '@/components/calendar/calendar-event-chip';
+import {
+  addDays,
+  labelFor,
+  rangeFor,
+  sameDay,
+  startOfMonth,
+  startOfWeek,
+  stepCursor,
+  TYPE_DEFAULT_COLOR,
+  TYPE_ICON,
+  TYPE_LABEL,
+  type CalendarViewMode,
+} from '@/components/calendar/calendar-shared';
+import { CalendarTimeGrid } from '@/components/calendar/calendar-time-grid';
+import { IcsImportDialog } from '@/components/meetings/ics-import-dialog';
+import { MeetingDialog } from '@/components/meetings/meeting-dialog';
+import { MeetingScopeDialog } from '@/components/meetings/meeting-scope-dialog';
 import { Button } from '@/components/ui/button';
 import { useCalendarEvents } from '@/hooks/use-calendar-events';
+import { useCalendarViewPref } from '@/hooks/use-calendar-view';
+import { useMeetingMove } from '@/hooks/use-meeting-move';
+import { useMeetingsEnabled } from '@/hooks/use-meetings';
 import { useUpdateTodo } from '@/hooks/use-todos';
+import { normalizeMeetingEvents, readMeetingMeta } from '@/lib/meetings/calendar-meetings';
+import { nextQuarterHour } from '@/lib/meetings/meeting-form';
 import { absoluteTime } from '@/lib/time';
 import { cn } from '@/lib/utils';
 
-export type CalendarViewMode = 'month' | 'week';
+export type { CalendarViewMode };
 
-const ALL_TYPES: CalendarEventType[] = ['task', 'todo', 'time'];
+const BASE_TYPES: CalendarEventType[] = ['task', 'todo', 'time'];
+const VIEW_LABEL: Record<CalendarViewMode, string> = {
+  day: 'Day',
+  week: 'Week',
+  month: 'Month',
+  agenda: 'Agenda',
+};
 
 interface Props {
   initialDate?: Date;
 }
 
-function startOfMonth(d: Date): Date {
-  const x = new Date(d);
-  x.setDate(1);
-  x.setHours(0, 0, 0, 0);
-  return x;
+interface NewMeeting {
+  start: Date;
+  allDay: boolean;
 }
-function endOfMonth(d: Date): Date {
-  const x = startOfMonth(d);
-  x.setMonth(x.getMonth() + 1);
-  x.setMilliseconds(-1);
-  return x;
-}
-function startOfWeek(d: Date): Date {
-  const x = new Date(d);
-  const day = (x.getDay() + 6) % 7;
-  x.setHours(0, 0, 0, 0);
-  x.setDate(x.getDate() - day);
-  return x;
-}
-function endOfWeek(d: Date): Date {
-  const x = startOfWeek(d);
-  x.setDate(x.getDate() + 7);
-  x.setMilliseconds(-1);
-  return x;
-}
-function addMonths(d: Date, n: number): Date {
-  const x = new Date(d);
-  x.setMonth(x.getMonth() + n);
-  return x;
-}
-function addDays(d: Date, n: number): Date {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
-  return x;
-}
-function sameDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
-}
-function fmtMonthLabel(d: Date): string {
-  return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-}
-function fmtWeekLabel(d: Date): string {
-  const start = startOfWeek(d);
-  const end = addDays(start, 6);
-  return `${start.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${end.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
-}
-
-const TYPE_LABEL: Record<CalendarEventType, string> = {
-  task: 'Tasks',
-  todo: 'Todos',
-  time: 'Time',
-};
-const TYPE_ICON: Record<CalendarEventType, typeof ListChecks> = {
-  task: ListChecks,
-  todo: FileText,
-  time: Clock,
-};
-const TYPE_DEFAULT_COLOR: Record<CalendarEventType, string> = {
-  task: '#6366f1',
-  todo: '#f59e0b',
-  time: '#0d9488',
-};
 
 export function GlobalCalendarView({ initialDate }: Props) {
+  const router = useRouter();
+  const meetingsOn = useMeetingsEnabled();
+  const allTypes = useMemo<CalendarEventType[]>(
+    () => (meetingsOn ? ['meeting', ...BASE_TYPES] : BASE_TYPES),
+    [meetingsOn],
+  );
   const [cursor, setCursor] = useState<Date>(initialDate ?? new Date());
-  const [view, setView] = useState<CalendarViewMode>('month');
-  const [types, setTypes] = useState<Set<CalendarEventType>>(() => new Set(ALL_TYPES));
+  const [view, setView] = useCalendarViewPref();
+  // Types the person switched off; everything else is shown, new types included.
+  const [hidden, setHidden] = useState<Set<CalendarEventType>>(() => new Set());
+  const types = useMemo(() => allTypes.filter((t) => !hidden.has(t)), [allTypes, hidden]);
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
+  const [newMeeting, setNewMeeting] = useState<NewMeeting | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const mover = useMeetingMove();
 
-  const range = useMemo(() => {
-    if (view === 'month') {
-      return { from: startOfMonth(cursor), to: endOfMonth(cursor) };
-    }
-    return { from: startOfWeek(cursor), to: endOfWeek(cursor) };
-  }, [cursor, view]);
-
-  const query = useCalendarEvents({
-    from: range.from,
-    to: range.to,
-    types: Array.from(types),
-  });
+  const range = useMemo(() => rangeFor(view, cursor), [cursor, view]);
+  const query = useCalendarEvents({ from: range.from, to: range.to, types });
   const updateTodo = useUpdateTodo();
-  const events = query.data?.items ?? [];
+  const events = useMemo(() => normalizeMeetingEvents(query.data?.items ?? []), [query.data]);
 
   function toggleType(t: CalendarEventType): void {
-    setTypes((prev) => {
+    setHidden((prev) => {
       const next = new Set(prev);
       if (next.has(t)) next.delete(t);
       else next.add(t);
       return next;
     });
   }
+
+  function select(e: CalendarEvent): void {
+    const meta = readMeetingMeta(e);
+    if (meta) {
+      const occurrence = meta.isRecurring
+        ? `?occurrence=${encodeURIComponent(meta.occurrenceStart.toISOString())}`
+        : '';
+      router.push(`/meetings/${meta.meetingId}${occurrence}`);
+      return;
+    }
+    setSelectedEvent(e);
+  }
+
+  function toggleTodo(id: string, done: boolean): void {
+    updateTodo.mutate({ id, input: { done } });
+  }
+
+  const days = useMemo(() => {
+    if (view === 'day') return [range.from];
+    if (view === 'week') return Array.from({ length: 7 }, (_, i) => addDays(range.from, i));
+    return [];
+  }, [view, range.from]);
 
   return (
     <div className="flex h-full flex-col">
@@ -124,7 +116,7 @@ export function GlobalCalendarView({ initialDate }: Props) {
             size="icon"
             variant="ghost"
             aria-label="Previous"
-            onClick={() => setCursor((d) => (view === 'month' ? addMonths(d, -1) : addDays(d, -7)))}
+            onClick={() => setCursor((d) => stepCursor(view, d, -1))}
           >
             <ChevronLeft className="h-4 w-4" />
           </Button>
@@ -135,35 +127,34 @@ export function GlobalCalendarView({ initialDate }: Props) {
             size="icon"
             variant="ghost"
             aria-label="Next"
-            onClick={() => setCursor((d) => (view === 'month' ? addMonths(d, 1) : addDays(d, 7)))}
+            onClick={() => setCursor((d) => stepCursor(view, d, 1))}
           >
             <ChevronRight className="h-4 w-4" />
           </Button>
-          <span className="text-ink ml-2 text-sm font-semibold">
-            {view === 'month' ? fmtMonthLabel(cursor) : fmtWeekLabel(cursor)}
-          </span>
+          <span className="text-ink ml-2 text-sm font-semibold">{labelFor(view, cursor)}</span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="border-line inline-flex rounded-md border bg-white p-0.5 text-xs">
-            {(['month', 'week'] as const).map((m) => (
+            {(['day', 'week', 'month', 'agenda'] as const).map((m) => (
               <button
                 key={m}
                 id={`cal-view-${m}`}
                 type="button"
                 onClick={() => setView(m)}
+                aria-pressed={view === m}
                 className={cn(
-                  'rounded px-2.5 py-1 capitalize transition-colors',
+                  'rounded px-2.5 py-1 transition-colors',
                   view === m ? 'bg-brand-50 text-brand-700' : 'text-ink-muted hover:text-ink',
                 )}
               >
-                {m}
+                {VIEW_LABEL[m]}
               </button>
             ))}
           </div>
           <div className="flex items-center gap-1">
-            {ALL_TYPES.map((t) => {
+            {allTypes.map((t) => {
               const Icon = TYPE_ICON[t];
-              const active = types.has(t);
+              const active = !hidden.has(t);
               return (
                 <button
                   key={t}
@@ -185,29 +176,78 @@ export function GlobalCalendarView({ initialDate }: Props) {
               );
             })}
           </div>
+          {meetingsOn ? (
+            <>
+              <Button size="sm" variant="secondary" onClick={() => setImportOpen(true)}>
+                <FileUp className="h-3.5 w-3.5" aria-hidden />
+                Import .ics
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => setNewMeeting({ start: nextQuarterHour(new Date()), allDay: false })}
+              >
+                <Plus className="h-3.5 w-3.5" aria-hidden />
+                New meeting
+              </Button>
+            </>
+          ) : null}
         </div>
       </header>
 
       <div className="bg-bg-subtle flex-1 overflow-y-auto">
         {view === 'month' ? (
-          <MonthGrid
-            cursor={cursor}
-            events={events}
-            onSelect={setSelectedEvent}
-            onTodoToggle={(id, done) => updateTodo.mutate({ id, input: { done } })}
-          />
+          <MonthGrid cursor={cursor} events={events} onSelect={select} onTodoToggle={toggleTodo} />
+        ) : view === 'agenda' ? (
+          <CalendarAgenda events={events} onSelect={select} />
         ) : (
-          <WeekGrid
-            cursor={cursor}
+          <CalendarTimeGrid
+            days={days}
             events={events}
-            onSelect={setSelectedEvent}
-            onTodoToggle={(id, done) => updateTodo.mutate({ id, input: { done } })}
+            onSelect={select}
+            onTodoToggle={toggleTodo}
+            {...(meetingsOn
+              ? {
+                  onCreateAt: (start: Date) => setNewMeeting({ start, allDay: false }),
+                  onMove: (e: CalendarEvent, start: Date) => void mover.begin(e, start),
+                }
+              : {})}
           />
         )}
       </div>
 
       {selectedEvent ? (
         <EventDetailModal event={selectedEvent} onClose={() => setSelectedEvent(null)} />
+      ) : null}
+
+      {meetingsOn ? (
+        <>
+          <MeetingDialog
+            open={newMeeting !== null}
+            onOpenChange={(o) => (!o ? setNewMeeting(null) : undefined)}
+            {...(newMeeting
+              ? { initialStart: newMeeting.start, initialAllDay: newMeeting.allDay }
+              : {})}
+            onSaved={(id) => router.push(`/meetings/${id}`)}
+          />
+          <IcsImportDialog open={importOpen} onOpenChange={setImportOpen} />
+          {mover.pending ? (
+            <MeetingScopeDialog
+              open
+              title="Move meeting"
+              description={
+                mover.recurring
+                  ? 'This meeting repeats. Choose what the move applies to.'
+                  : undefined
+              }
+              confirmLabel="Move"
+              recurring={mover.recurring}
+              hasAttendees={mover.hasAttendees}
+              busy={mover.busy}
+              onConfirm={mover.confirm}
+              onCancel={mover.cancel}
+            />
+          ) : null}
+        </>
       ) : null}
     </div>
   );
@@ -294,134 +334,6 @@ function MonthGrid({
         })}
       </div>
     </div>
-  );
-}
-
-function WeekGrid({
-  cursor,
-  events,
-  onSelect,
-  onTodoToggle,
-}: {
-  cursor: Date;
-  events: CalendarEvent[];
-  onSelect: (e: CalendarEvent) => void;
-  onTodoToggle: (todoId: string, done: boolean) => void;
-}) {
-  const weekStart = startOfWeek(cursor);
-  const days = useMemo(
-    () => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)),
-    [weekStart],
-  );
-  const eventsByDay = useMemo(() => {
-    const map = new Map<string, CalendarEvent[]>();
-    for (const e of events) {
-      const k = e.start.toDateString();
-      const arr = map.get(k) ?? [];
-      arr.push(e);
-      map.set(k, arr);
-    }
-    return map;
-  }, [events]);
-  const today = new Date();
-  return (
-    <div className="bg-line grid grid-cols-7 gap-px p-3">
-      {days.map((d) => {
-        const list = eventsByDay.get(d.toDateString()) ?? [];
-        const isToday = sameDay(d, today);
-        return (
-          <div key={d.toDateString()} className="min-h-[400px] bg-white p-2">
-            <div className="mb-2 text-center">
-              <div className="text-ink-muted text-[10px] font-semibold uppercase tracking-wide">
-                {d.toLocaleDateString(undefined, { weekday: 'short' })}
-              </div>
-              <div
-                className={cn(
-                  'mx-auto mt-0.5 inline-flex h-7 w-7 items-center justify-center rounded-full text-sm font-semibold',
-                  isToday ? 'bg-brand-600 text-white' : 'text-ink',
-                )}
-              >
-                {d.getDate()}
-              </div>
-            </div>
-            <ul className="space-y-1" role="list">
-              {list.map((e) => (
-                <EventChip
-                  key={e.id}
-                  event={e}
-                  expanded
-                  onClick={() => onSelect(e)}
-                  onTodoToggle={onTodoToggle}
-                />
-              ))}
-              {list.length === 0 ? (
-                <li className="text-ink-disabled text-[11px]">No events</li>
-              ) : null}
-            </ul>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function EventChip({
-  event,
-  expanded,
-  onClick,
-  onTodoToggle,
-}: {
-  event: CalendarEvent;
-  expanded?: boolean;
-  onClick: () => void;
-  onTodoToggle: (todoId: string, done: boolean) => void;
-}) {
-  const color = event.color ?? TYPE_DEFAULT_COLOR[event.type];
-  if (event.type === 'todo') {
-    const done = (event.meta as { done?: boolean }).done === true;
-    const todoId = (event.meta as { todoId?: string }).todoId ?? '';
-    return (
-      <li className="hover:bg-bg-subtle flex items-center gap-1.5 rounded px-1 py-0.5 text-[11px]">
-        <input
-          type="checkbox"
-          checked={done}
-          onChange={(e) => onTodoToggle(todoId, e.target.checked)}
-          aria-label={done ? 'Mark not done' : 'Mark done'}
-          className="h-3 w-3 accent-amber-500"
-        />
-        <button
-          type="button"
-          onClick={onClick}
-          className={cn(
-            'min-w-0 flex-1 truncate text-left',
-            done ? 'text-ink-disabled line-through' : 'text-ink',
-          )}
-          style={{ color: done ? undefined : color }}
-        >
-          {event.title}
-        </button>
-      </li>
-    );
-  }
-  return (
-    <li>
-      <button
-        type="button"
-        onClick={onClick}
-        className={cn(
-          'flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-[11px] hover:opacity-80',
-          expanded ? 'truncate' : 'truncate',
-        )}
-        style={{ backgroundColor: `${color}22`, color }}
-      >
-        <span
-          className="h-1.5 w-1.5 shrink-0 rounded-full"
-          style={{ backgroundColor: color }}
-          aria-hidden
-        />
-        <span className="truncate font-medium">{event.title}</span>
-      </button>
-    </li>
   );
 }
 

@@ -8,10 +8,12 @@ import {
   cuid,
   inviteOrganizationOwnerSchema,
   type InviteOrganizationOwnerInput,
+  type PlatformAddonListResponse,
   updateOrganizationSchema,
   type UpdateOrganizationInput,
 } from '@botss/shared-types';
 
+import { AddonsService } from '../addons/addons.service';
 import { SkipPermissions } from '../common/decorators/skip-permissions.decorator';
 import { GlobalAdmin, GlobalAdminGuard } from '../common/guards/global-admin.guard';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
@@ -26,7 +28,10 @@ import { OrganizationsService } from './organizations.service';
 @Controller('organizations')
 @UseGuards(GlobalAdminGuard)
 export class OrganizationsController {
-  constructor(private readonly organizations: OrganizationsService) {}
+  constructor(
+    private readonly organizations: OrganizationsService,
+    private readonly addons: AddonsService,
+  ) {}
 
   @Get()
   @GlobalAdmin()
@@ -40,6 +45,20 @@ export class OrganizationsController {
   @SkipPermissions()
   getOne(@Param('orgId', new ZodValidationPipe(cuid)) orgId: string) {
     return this.organizations.getById(orgId);
+  }
+
+  /**
+   * Which add-ons an organization has on, and whether each is configured.
+   * Never the settings themselves: platform operators do not see an
+   * organization's settings or secrets.
+   */
+  @Get(':orgId/addons')
+  @GlobalAdmin()
+  @SkipPermissions()
+  addonStates(
+    @Param('orgId', new ZodValidationPipe(cuid)) orgId: string,
+  ): Promise<PlatformAddonListResponse> {
+    return this.addons.platformList(orgId);
   }
 
   @Post()

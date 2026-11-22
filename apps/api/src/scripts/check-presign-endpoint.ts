@@ -10,6 +10,8 @@
  *     accepts the browser's PUT.
  *  2. Without it, behaviour is unchanged: the URL is signed for S3_ENDPOINT,
  *     and S3_PUBLIC_URL (when set) only swaps the host afterwards.
+ *  3. The form answer links (presignObjectUpload / presignObjectDownload)
+ *     follow the same rule as 1.
  *
  * Run: pnpm --filter @botss/api test.
  */
@@ -69,6 +71,29 @@ async function expectedSignature(
   return new URL(url).searchParams.get('X-Amz-Signature');
 }
 
+/** The signature a client configured for `endpoint` computes for `command`, signed when `signed` was. */
+async function signatureFor(
+  endpoint: string,
+  signed: URL,
+  command: PutObjectCommand,
+): Promise<string | null> {
+  const amzDate = signed.searchParams.get('X-Amz-Date') ?? '';
+  const signingDate = new Date(
+    amzDate.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/, '$1-$2-$3T$4:$5:$6Z'),
+  );
+  const expiresIn = Number(signed.searchParams.get('X-Amz-Expires') ?? 600);
+  const client = new S3Client({
+    endpoint,
+    region: 'us-east-1',
+    credentials: { accessKeyId: 'botss-local', secretAccessKey: 'botss-local-secret' },
+    forcePathStyle: true,
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
+  });
+  const url = await getSignedUrl(client, command, { expiresIn, signingDate });
+  return new URL(url).searchParams.get('X-Amz-Signature');
+}
+
 async function main(): Promise<void> {
   setEnv({
     S3_REGION: undefined,
@@ -107,6 +132,42 @@ async function main(): Promise<void> {
     new URL(swapped.uploadUrl).searchParams.get('X-Amz-Signature'),
     await expectedSignature(INTERNAL, swapped),
   );
+
+  // 3. The form answer helpers follow the same rule: with S3_PRESIGN_ENDPOINT
+  //    both the upload and the download link are signed for the browser's host.
+  setEnv({ S3_ENDPOINT: INTERNAL, S3_PUBLIC_URL: BROWSER, S3_PRESIGN_ENDPOINT: BROWSER });
+  const files = new FilesService({} as unknown as PrismaService);
+  const formUpload = await files.presignObjectUpload({
+    bucket: 'botss-files',
+    objectKey: 'forms/check/cv.pdf',
+    filename: 'cv.pdf',
+    mimeType: 'application/pdf',
+    sizeBytes: 1000,
+  });
+  const formUploadUrl = new URL(formUpload.uploadUrl);
+  assert.equal(formUploadUrl.origin, BROWSER);
+  assert.equal(
+    formUploadUrl.searchParams.get('X-Amz-Signature'),
+    await signatureFor(
+      BROWSER,
+      formUploadUrl,
+      new PutObjectCommand({
+        Bucket: 'botss-files',
+        Key: 'forms/check/cv.pdf',
+        ContentType: 'application/pdf',
+        ContentLength: 1000,
+        ContentDisposition: formUpload.headers['Content-Disposition'],
+      }),
+    ),
+    'form upload URL must carry a signature valid for the host the browser sends',
+  );
+  const formDownload = await files.presignObjectDownload(
+    'botss-files',
+    'forms/check/cv.pdf',
+    'cv.pdf',
+    'application/pdf',
+  );
+  assert.equal(new URL(formDownload.url).origin, BROWSER);
 
   console.log('check-presign-endpoint: ok');
 }

@@ -33,6 +33,10 @@ self.addEventListener('push', (event) => {
 
   const title = payload.title || 'The Botss';
   const isCall = payload.type === 'call';
+  // Do Not Disturb call: still shown, with Answer/Decline, but never rings.
+  const silent = payload.silent === true;
+  const pdata = payload.data || {};
+  const isMeetingReminder = pdata.type === 'meeting-reminder';
 
   /** @type {NotificationOptions} */
   const options = {
@@ -44,8 +48,9 @@ self.addEventListener('push', (event) => {
     tag: payload.tag || (payload.data && payload.data.roomId) || undefined,
     // Calls are sticky: the OS keeps the banner up until the user
     // dismisses or accepts. Messages auto-dismiss on a timer.
-    requireInteraction: isCall,
-    renotify: isCall,
+    requireInteraction: isCall && !silent,
+    renotify: isCall && !silent,
+    silent: silent,
     // Forward structured metadata so notificationclick can route.
     data: Object.assign({}, payload.data || {}, {
       url: payload.url || '/',
@@ -59,21 +64,120 @@ self.addEventListener('push', (event) => {
       : [],
   };
 
+  if (isMeetingReminder) {
+    // Rings even in Do Not Disturb (the server skips DND for reminders).
+    options.tag = 'meeting-' + pdata.meetingId + '-' + pdata.occurrenceStart;
+    options.requireInteraction = true;
+    options.renotify = true;
+    options.silent = false;
+    options.data = Object.assign({}, options.data, { type: 'meeting-reminder' });
+    options.actions = [];
+    if (typeof pdata.meetingUrl === 'string' && pdata.meetingUrl) {
+      options.actions.push({ action: 'join', title: 'Join' });
+    }
+    options.actions.push({ action: 'snooze', title: 'Snooze 5 min' });
+  }
+
   event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// An open CRM tab tells us a call is over (ended, declined, answered
+// elsewhere): close that call's banner so it does not linger.
+self.addEventListener('message', (event) => {
+  const data = event.data;
+  if (
+    !data ||
+    (data.type !== 'botss:clear-call' && data.type !== 'botss:clear-meeting') ||
+    typeof data.tag !== 'string'
+  ) {
+    return;
+  }
+  event.waitUntil(
+    self.registration.getNotifications({ tag: data.tag }).then((list) => {
+      for (const n of list) n.close();
+    }),
+  );
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  // "Decline" on a call banner dismisses it; it must not open or focus the app.
-  if (event.action === 'decline') return;
-  const absoluteUrl = sameOriginUrl(event.notification.data && event.notification.data.url);
+  const notificationData = event.notification.data || {};
+  // Always this app's own origin: a payload URL for another site falls back
+  // to the app root (see sameOriginUrl).
+  const absoluteUrl = sameOriginUrl(notificationData.url);
+  const isDecline = event.action === 'decline' && !!notificationData.callId;
+  const isJoin = event.action === 'join' && notificationData.type === 'meeting-reminder';
+  const isSnooze =
+    event.action === 'snooze' &&
+    notificationData.type === 'meeting-reminder' &&
+    !!(notificationData.snooze && notificationData.snooze.deliveryId);
 
   event.waitUntil(
     (async () => {
+      if (isJoin) {
+        // Join opens the external meeting link and nothing else.
+        const meetingUrl = notificationData.meetingUrl;
+        if (typeof meetingUrl === 'string' && self.clients.openWindow) {
+          let parsed = null;
+          try {
+            parsed = new URL(meetingUrl);
+          } catch (_err) {
+            /* invalid URL */
+          }
+          if (parsed && (parsed.protocol === 'https:' || parsed.protocol === 'http:')) {
+            try {
+              await self.clients.openWindow(parsed.href);
+            } catch (_err) {
+              /* blocked */
+            }
+          }
+        }
+        return;
+      }
       const allClients = await self.clients.matchAll({
         type: 'window',
         includeUncontrolled: true,
       });
+      if (isSnooze) {
+        // The signed-in web app calls the API; with no tab open, a new
+        // window does it from `?snooze=<deliveryId>`.
+        const deliveryId = notificationData.snooze.deliveryId;
+        const open = allClients.find((c) => new URL(c.url).origin === self.location.origin);
+        if (open) {
+          open.postMessage({ type: 'botss:meeting-snooze', deliveryId: deliveryId });
+          return;
+        }
+        if (self.clients.openWindow) {
+          const snoozeUrl = new URL(absoluteUrl);
+          snoozeUrl.searchParams.set('snooze', String(deliveryId));
+          try {
+            await self.clients.openWindow(snoozeUrl.href);
+          } catch (_err) {
+            /* blocked */
+          }
+        }
+        return;
+      }
+      if (isDecline) {
+        // Decline never opens the call. An open tab emits `call_reject`
+        // itself; with none open, a new window does it from `decline=1`.
+        const open = allClients.find((c) => new URL(c.url).origin === self.location.origin);
+        if (open) {
+          open.postMessage({ type: 'botss:call-decline', callId: notificationData.callId });
+          return;
+        }
+        if (self.clients.openWindow) {
+          const declineUrl = new URL(absoluteUrl);
+          declineUrl.searchParams.set('call', notificationData.callId);
+          declineUrl.searchParams.set('decline', '1');
+          try {
+            await self.clients.openWindow(declineUrl.href);
+          } catch (_err) {
+            /* blocked */
+          }
+        }
+        return;
+      }
       // Prefer focusing an existing tab on the same origin and navigating
       // it in-place. The user keeps their session + cached query state.
       for (const client of allClients) {

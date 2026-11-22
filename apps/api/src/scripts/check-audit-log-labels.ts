@@ -61,7 +61,7 @@ const L = lookups({
   },
   organization: {
     [ORG_A]: { name: 'Org A', orgIds: [ORG_A] },
-    [ROOT_ORG_ID]: { name: 'The Botss', orgIds: [ROOT_ORG_ID] },
+    [ROOT_ORG_ID]: { name: 'Platform Org', orgIds: [ROOT_ORG_ID] },
   },
 });
 

@@ -13,6 +13,7 @@ import { randomBytes } from 'node:crypto';
 import { Prisma } from '@botss/database';
 import type {
   CallSummary,
+  IncomingCallResponse,
   ChatContact,
   ChatReactionTally,
   ChatRoomInvite,
@@ -30,6 +31,9 @@ import type {
 import { isReservedChatContent, RESERVED_CHAT_CONTENT_MESSAGE } from '@botss/shared-types';
 import { isFullWorkspaceAdmin } from '@botss/auth';
 
+import { addonDisabled } from '../addons/addon-errors';
+import { addonDefinition } from '../addons/addon-registry';
+import { AddonsService } from '../addons/addons.service';
 import { loadEffectivePermissions } from '../common/permissions/effective-permissions';
 import { canSeeProject } from '../common/project-access';
 import { orgWorkspaceMembership } from '../common/tenant-scope';
@@ -38,11 +42,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { incomingRequestWhere } from './chat-request-rules';
 import { assertRoomAdminRows, lockRoomAdmins, roomAdminRowsWhere } from './room-admins';
-import {
-  assertNotBlockedInCrossOrgDm,
-  inviteKeepsOrganization,
-  spansOrganizations,
-} from './cross-org-block';
+import { assertNotBlockedInCrossOrgDm, spansOrganizations } from './cross-org-block';
 import {
   CHAT_FANOUT_JOB_OPTIONS,
   CHAT_FANOUT_QUEUE,
@@ -138,6 +138,9 @@ export class ChatService {
     @Optional()
     @InjectQueue(CHAT_FANOUT_QUEUE)
     private readonly fanoutQueue?: Queue<ChatFanoutJobData>,
+    // Optional: calls are refused when the caller's organization switched
+    // the `livekit` add-on off. Absent (tests) means no add-on gate.
+    @Optional() private readonly addons?: AddonsService,
   ) {}
 
   /**
@@ -210,7 +213,7 @@ export class ChatService {
    * the workspace switcher - chat is org-wide, not workspace-scoped:
    *
    * Only users in the caller's own organization, for everyone - root-org
-   * (Botss) members included - so nobody can enumerate another tenant's
+   * (platform) members included - so nobody can enumerate another tenant's
    * people. Users with no `organizationId` see nobody.
    */
   async listContactsForUser(userId: string): Promise<{ items: ChatContact[] }> {
@@ -1556,6 +1559,56 @@ export class ChatService {
     return { updated: ids.length, messageIds: ids };
   }
 
+  /**
+   * 403 `addon-disabled` when the caller's organization switched calls
+   * (livekit) off, or, with `roomId`, when the room spans organizations and
+   * no other participant's organization has calls on.
+   */
+  async assertCallsEnabled(userId: string, roomId?: string): Promise<void> {
+    await this.addons?.assertEnabledForUser(userId, 'livekit');
+    if (roomId) await this.ringableReceivers(userId, roomId);
+  }
+
+  /**
+   * The participants a call from `callerId` rings, with their organizations.
+   * In a room that spans organizations, a receiver whose organization
+   * switched calls off is not rung; refuses when nobody is left to ring.
+   * Org-less receivers follow `assertEnabled` (no organization: allowed).
+   */
+  private async ringableReceivers(
+    callerId: string,
+    roomId: string,
+  ): Promise<{ participantIds: string[]; receiverUserIds: string[] }> {
+    const participants = await this.prisma.client.chatRoomParticipant.findMany({
+      where: { roomId },
+      select: { userId: true, user: { select: { organizationId: true } } },
+    });
+    const participantIds = participants.map((p) => p.userId);
+    const receivers = participants.filter((p) => p.userId !== callerId);
+    const addons = this.addons;
+    if (!addons || receivers.length === 0 || !(await this.roomSpansOrgs(roomId))) {
+      return { participantIds, receiverUserIds: receivers.map((p) => p.userId) };
+    }
+    const orgIds = [
+      ...new Set(receivers.map((p) => p.user?.organizationId).filter((id): id is string => !!id)),
+    ];
+    const callsOn = new Map(
+      await Promise.all(
+        orgIds.map(async (id) => [id, await addons.isEnabled(id, 'livekit')] as const),
+      ),
+    );
+    const ringable = receivers.filter((p) => {
+      const orgId = p.user?.organizationId;
+      return !orgId || callsOn.get(orgId) === true;
+    });
+    if (ringable.length === 0) throw addonDisabled(addonDefinition('livekit').name);
+    const skipped = new Set(receivers.filter((p) => !ringable.includes(p)).map((p) => p.userId));
+    return {
+      participantIds: participantIds.filter((id) => !skipped.has(id)),
+      receiverUserIds: ringable.map((p) => p.userId),
+    };
+  }
+
   async initiateCall(
     callerId: string,
     callerSocketId: string,
@@ -1566,6 +1619,7 @@ export class ChatService {
   }> {
     await this.assertRoomMember(callerId, roomId);
     await this.assertNotBlockedInCrossOrgDm(callerId, roomId);
+    await this.assertCallsEnabled(callerId);
     const existingCallId = this.callsByRoom.get(roomId);
     if (existingCallId) {
       throw new BadRequestException({
@@ -1573,6 +1627,8 @@ export class ChatService {
         status: 400,
       });
     }
+    // Before the session row: a call nobody can receive writes nothing.
+    const { participantIds, receiverUserIds } = await this.ringableReceivers(callerId, roomId);
     const session = await this.prisma.client.callSession.create({
       data: {
         callerId,
@@ -1580,11 +1636,6 @@ export class ChatService {
         status: 'RINGING',
       },
     });
-    const participants = await this.prisma.client.chatRoomParticipant.findMany({
-      where: { roomId },
-      select: { userId: true },
-    });
-    const receiverUserIds = participants.map((p) => p.userId).filter((id) => id !== callerId);
 
     const record: CallRecord = {
       id: session.id,
@@ -1594,7 +1645,7 @@ export class ChatService {
       status: 'RINGING',
       startedAt: session.startedAt,
       acceptedByUserIds: new Set(),
-      participantIds: new Set(participants.map((p) => p.userId)),
+      participantIds: new Set(participantIds),
       signalers: new Set([callerId]),
     };
     this.activeCalls.set(session.id, record);
@@ -1642,7 +1693,7 @@ export class ChatService {
           type: 'call',
           url: `/chat/${roomId}?call=${callId}`,
           tag: `call:${roomId}`,
-          data: { roomId, callId, callerId },
+          data: { roomId, callId, callerId, callerName },
         }).catch(() => {
           /* per-recipient errors already logged inside the service */
         }),
@@ -1685,6 +1736,28 @@ export class ChatService {
       callerId: record.callerId,
       callerSocketId: record.callerSocketId,
       roomId: record.roomId,
+    };
+  }
+
+  /**
+   * The call as the signed-in user's incoming call, or "not ringing". Only a
+   * participant other than the caller can see it; anyone else (and any call
+   * that is gone or already answered) gets `ringing: false`, which leaks
+   * nothing about other people's calls.
+   */
+  getIncomingCall(callId: string, userId: string): IncomingCallResponse {
+    const record = this.activeCalls.get(callId);
+    if (
+      !record ||
+      record.status !== 'RINGING' ||
+      record.callerId === userId ||
+      !record.participantIds.has(userId)
+    ) {
+      return { ringing: false, call: null };
+    }
+    return {
+      ringing: true,
+      call: { callId: record.id, roomId: record.roomId, callerId: record.callerId },
     };
   }
 
@@ -2274,18 +2347,16 @@ export class ChatService {
   }
 
   async previewInvite(userId: string, code: string): Promise<InvitePreview> {
-    const invite = await this.findActiveInvite(code);
-    const alreadyJoined = await this.prisma.client.chatRoomParticipant.findUnique({
-      where: { roomId_userId: { roomId: invite.roomId, userId } },
-      select: { id: true },
-    });
-    // The preview shows the room name, its size and the inviter's email, so
-    // it is held to the same rule as accepting: someone who could not join
-    // learns nothing about the room.
-    if (!alreadyJoined) await this.assertMayJoinViaInvite(userId, invite);
-    const participants = await this.prisma.client.chatRoomParticipant.count({
-      where: { roomId: invite.roomId },
-    });
+    const invite = await this.findInviteForCaller(userId, code);
+    const [participants, alreadyJoined] = await Promise.all([
+      this.prisma.client.chatRoomParticipant.count({
+        where: { roomId: invite.roomId },
+      }),
+      this.prisma.client.chatRoomParticipant.findUnique({
+        where: { roomId_userId: { roomId: invite.roomId, userId } },
+        select: { id: true },
+      }),
+    ]);
     const now = Date.now();
     const expired = invite.expiresAt ? invite.expiresAt.getTime() < now : false;
     const exhausted = invite.maxUses ? invite.usedCount >= invite.maxUses : false;
@@ -2313,11 +2384,11 @@ export class ChatService {
     userId: string,
     code: string,
   ): Promise<{ roomId: string; alreadyJoined: boolean; systemMessage: ChatRoomMessage | null }> {
-    const invite = await this.findActiveInvite(code);
-    // A current member is told so before any other check runs: expiry, the
-    // usage cap and the join rules decide who may come in, and a member
-    // (of a cross-org room too) is already in. The invite page accepts again
-    // on its own for members, so an error here made it retry in a loop.
+    const invite = await this.findInviteForCaller(userId, code);
+    // A current member is told so before expiry or the usage cap is looked
+    // at: those decide who may come in, and a member is already in. The
+    // invite page accepts again on its own for members, so an error here made
+    // it retry in a loop. findInviteForCaller has already refused outsiders.
     const existing = await this.prisma.client.chatRoomParticipant.findUnique({
       where: { roomId_userId: { roomId: invite.roomId, userId } },
       select: { id: true },
@@ -2334,7 +2405,6 @@ export class ChatService {
     if (invite.maxUses && invite.usedCount >= invite.maxUses) {
       throw new BadRequestException({ title: 'Invite reached its usage cap', status: 400 });
     }
-    await this.assertMayJoinViaInvite(userId, invite);
     // Claim a use atomically. Read-then-increment let N concurrent accepts on
     // a single-use invite all pass the check above and all join a private
     // room. The conditional updateMany only matches while a use is left.
@@ -2362,56 +2432,20 @@ export class ChatService {
     return { roomId: invite.roomId, alreadyJoined: false, systemMessage };
   }
 
-  /** May someone who is not in the room yet join it with this invite? */
-  private async assertMayJoinViaInvite(
-    userId: string,
-    invite: { roomId: string; createdById: string; room: { workspaceId: string | null } },
-  ): Promise<void> {
-    if (invite.room.workspaceId) {
-      const ws = await orgWorkspaceMembership(this.prisma, userId, invite.room.workspaceId);
-      if (!ws) {
-        throw new ForbiddenException({
-          title: 'You must be a workspace member to accept this invite',
-          status: 403,
-        });
-      }
-      return;
-    }
-    // DMs and groups have no workspace: their organization is their
-    // members'. An invite code must not carry someone from another
-    // organization into a private group; only an accepted chat request
-    // ever opens a conversation across organizations.
-    await this.assertInviteStaysInOrg(userId, invite.roomId, invite.createdById);
-  }
-
-  /** Gathers the inputs of `inviteKeepsOrganization` (cross-org-block.ts). */
-  private async assertInviteStaysInOrg(
-    userId: string,
-    roomId: string,
-    inviteCreatorId: string,
-  ): Promise<void> {
-    const [myOrgId, creatorOrgId, participants] = await Promise.all([
-      this.getUserOrganizationId(userId),
-      this.getUserOrganizationId(inviteCreatorId),
-      this.prisma.client.chatRoomParticipant.findMany({
-        where: { roomId },
-        select: { user: { select: { organizationId: true } } },
-      }),
-    ]);
-    const sameOrg = inviteKeepsOrganization({
-      joinerOrgId: myOrgId,
-      creatorOrgId,
-      participantOrgIds: participants.map((p) => p.user.organizationId),
-    });
-    if (!sameOrg) {
-      throw new ForbiddenException({
-        title: 'This invite is for another organization',
-        status: 403,
-      });
-    }
-  }
-
-  private async findActiveInvite(code: string) {
+  /**
+   * The invite behind `code`, only when the caller may join its room; the
+   * one gate shared by preview and accept. A room in a workspace takes
+   * members of that workspace (in the caller's own organization); a room
+   * without one (a group) takes people in the inviter's organization.
+   * Cross-org chat goes through chat requests, never invite links, and a
+   * platform SUPER_ADMIN is an ordinary member of the root org here.
+   *
+   * A caller who may not join gets the same 404 as an unknown code, before
+   * expiry or usage is looked at, so a leaked code says nothing about another
+   * organization's room, its size or who created the link.
+   */
+  private async findInviteForCaller(userId: string, code: string) {
+    const notFound = () => new NotFoundException({ title: 'Invite not found', status: 404 });
     const invite = await this.prisma.client.chatRoomInvite.findFirst({
       where: { code, deletedAt: null },
       include: {
@@ -2419,12 +2453,17 @@ export class ChatService {
           select: { id: true, name: true, type: true, workspaceId: true, deletedAt: true },
         },
         createdBy: {
-          select: { id: true, name: true, email: true, image: true },
+          select: { id: true, name: true, email: true, image: true, organizationId: true },
         },
       },
     });
-    if (!invite || invite.room.deletedAt) {
-      throw new NotFoundException({ title: 'Invite not found', status: 404 });
+    if (!invite || invite.room.deletedAt) throw notFound();
+    if (invite.room.workspaceId) {
+      const ws = await orgWorkspaceMembership(this.prisma, userId, invite.room.workspaceId);
+      if (!ws) throw notFound();
+    } else {
+      const myOrgId = await this.getUserOrganizationId(userId);
+      if (!myOrgId || myOrgId !== invite.createdBy.organizationId) throw notFound();
     }
     return invite;
   }

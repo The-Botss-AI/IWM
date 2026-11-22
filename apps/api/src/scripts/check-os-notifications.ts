@@ -1,5 +1,5 @@
 /**
- * Desktop OS notifications (A6), no database, Redis or push credentials:
+ * Desktop OS notifications, no database, Redis or push credentials:
  *
  * 1. `sendDesktopNotificationToUsers` publishes the push to the live stream
  *    (-> the gateway's `os_notification`) even with no VAPID keys and no
@@ -280,7 +280,7 @@ async function main(): Promise<void> {
         type: 'call',
         url: `/chat/${ROOM}?call=call1`,
         tag: `call:${ROOM}`,
-        data: { roomId: ROOM, callId: 'call1', callerId: SENDER },
+        data: { roomId: ROOM, callId: 'call1', callerId: SENDER, callerName: 'Sara' },
       });
     }
     assert.deepEqual(

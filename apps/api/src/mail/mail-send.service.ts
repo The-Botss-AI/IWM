@@ -17,6 +17,7 @@ import type {
 
 import { createTransport } from 'nodemailer';
 
+import { demoModeForbidden, demoSkip, isDemoMode } from '../common/demo-mode';
 import { ImapSyncService } from './imap-sync.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailCryptoService } from './mail-crypto.service';
@@ -640,6 +641,7 @@ export class MailSendService {
   }
 
   async enqueue(userId: string, input: SendMailMessageInput) {
+    if (isDemoMode()) throw demoModeForbidden('Sending mail is turned off in the live demo.');
     const account = await this.prisma.client.mailAccount.findUnique({
       where: { id: input.accountId },
     });
@@ -710,6 +712,7 @@ export class MailSendService {
 
   /** Worker entry: actually deliver one outbox row. */
   async processSend(outboxId: string): Promise<void> {
+    if (demoSkip(this.logger, `mailbox send outboxId=${outboxId}`)) return;
     const row = await this.prisma.client.mailOutbox.findUnique({
       where: { id: outboxId },
       include: { account: true },

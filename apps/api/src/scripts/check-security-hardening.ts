@@ -454,6 +454,8 @@ async function main(): Promise<void> {
       {
         client: {
           organization: { findFirst: async () => null },
+          // No organization has claimed acme.example (domain claims, #19).
+          organizationDomain: { findFirst: async () => null },
           user: {
             findUnique: async (args: { includeDeleted?: boolean }) =>
               args.includeDeleted === true ? { id: OTHER } : null,
@@ -581,7 +583,13 @@ async function main(): Promise<void> {
             usedCount: 0,
             expiresAt,
             room: { id: 'r1', name: 'Secret', type: 'GROUP', workspaceId: null, deletedAt: null },
-            createdBy: { id: OTHER, name: 'Other', email: 'other@b.example', image: null },
+            createdBy: {
+              id: OTHER,
+              name: 'Other',
+              email: 'other@b.example',
+              image: null,
+              organizationId: 'org-b',
+            },
           }),
         },
         chatRoomParticipant: {
@@ -595,10 +603,13 @@ async function main(): Promise<void> {
     (invites as unknown as { getUserOrganizationId: (id: string) => Promise<string> })[
       'getUserOrganizationId'
     ] = async (id) => orgOf[id]!;
-    // Someone from another org learns nothing about the room from a preview.
-    await assert.rejects(invites.previewInvite(ME, 'code'), ForbiddenException);
-    await assert.rejects(invites.acceptInvite(ME, 'code'), ForbiddenException);
-    // A current member (here, of a cross-org room) is told so, not refused.
+    // Someone from another org learns nothing about the room: the same 404 as
+    // an unknown code (findInviteForCaller; check-chat-invites.ts covers the
+    // details).
+    await assert.rejects(invites.previewInvite(ME, 'code'), NotFoundException);
+    await assert.rejects(invites.acceptInvite(ME, 'code'), NotFoundException);
+    // A current member is told so, not refused.
+    orgOf[ME] = 'org-b';
     member = true;
     assert.equal((await invites.previewInvite(ME, 'code')).alreadyJoined, true);
     assert.deepEqual(await invites.acceptInvite(ME, 'code'), {
@@ -613,6 +624,7 @@ async function main(): Promise<void> {
     member = false;
     await assert.rejects(invites.acceptInvite(ME, 'code'), BadRequestException);
     expiresAt = null;
+    orgOf[ME] = 'org-a';
 
     // Admin changes count and write under the room lock, in one transaction.
     const steps: string[] = [];

@@ -3,6 +3,8 @@
 import { AlertTriangle, CalendarDays, CheckCircle2, Clock, Download, XCircle } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
+import { AddonOffNotice } from '@/components/addons/addon-off-notice';
+import { useAddons } from '@/hooks/use-addons';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { QueryError } from '@/components/ui/query-error';
@@ -22,7 +24,7 @@ type RangePreset = 'daily' | 'weekly' | 'monthly' | 'yearly';
  * `/admin/timesheets/export` endpoint so the file lands directly in
  * the user's downloads.
  */
-export default function AttendanceSummaryPage() {
+function AttendanceSummaryPageContent() {
   const members = useAttendanceUsers();
   const [userId, setUserId] = useState<string>('');
   const [memberSearch, setMemberSearch] = useState('');
@@ -368,4 +370,11 @@ function startOfPreset(now: Date, preset: RangePreset): { from: Date; to: Date }
       return { from: start, to: end };
     }
   }
+}
+
+/** Hidden while the organization has the HR add-on switched off. */
+export default function AttendanceSummaryPage() {
+  const addons = useAddons();
+  if (!addons.isOn('hr')) return <AddonOffNotice name="HR" />;
+  return <AttendanceSummaryPageContent />;
 }

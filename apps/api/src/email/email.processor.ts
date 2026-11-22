@@ -15,6 +15,8 @@ import {
   renderInvoiceEmail,
   renderResetPasswordEmail,
   renderSignatureCompletedEmail,
+  renderFormSubmissionEmail,
+  renderMeetingInviteEmail,
   renderSignatureDeclinedEmail,
   renderSignatureRequestEmail,
 } from './mail.sender';
@@ -61,7 +63,7 @@ export class EmailProcessor extends WorkerHost {
     const rendered = render(data);
 
     // Invoice mail carries the PDF and a Reply-To; everything else is plain.
-    const extras: Pick<MailSendArgs, 'attachments' | 'replyTo'> = {};
+    const extras: Pick<MailSendArgs, 'attachments' | 'replyTo' | 'icalEvent'> = {};
     if (data.kind === 'invoice') {
       const pdf = await this.files.getObjectBuffer(data.workspaceId, data.pdfFileId);
       if (!pdf) {
@@ -78,6 +80,10 @@ export class EmailProcessor extends WorkerHost {
     }
     if (data.kind === 'signature-request' && data.replyTo) {
       extras.replyTo = data.replyTo;
+    }
+    if (data.kind === 'meeting-invite') {
+      extras.icalEvent = { method: data.method, content: data.ics, filename: 'invite.ics' };
+      if (data.replyTo) extras.replyTo = data.replyTo;
     }
     if (data.kind === 'signature-completed') {
       // includeDeleted: the sealed PDF must still attach if someone removed
@@ -206,6 +212,24 @@ function render(data: EmailJobData): { subject: string; html: string; text: stri
         inviterName: data.inviterName,
         url: data.url,
         expiresAtLabel: data.expiresAtLabel,
+      });
+    case 'meeting-invite':
+      return renderMeetingInviteEmail({
+        variant: data.variant,
+        recipientName: data.recipientName,
+        organizerName: data.organizerName,
+        title: data.title,
+        whenLabel: data.whenLabel,
+        repeatLabel: data.repeatLabel,
+        location: data.location,
+        meetingUrl: data.meetingUrl,
+        rsvp: data.rsvp,
+      });
+    case 'form-submission':
+      return renderFormSubmissionEmail({
+        formTitle: data.formTitle,
+        submittedBy: data.submittedBy,
+        url: data.url,
       });
     case 'signature-declined':
       return renderSignatureDeclinedEmail({

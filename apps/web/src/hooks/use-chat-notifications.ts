@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef } from 'react';
 import {
   type ChatRoomMessage,
@@ -31,8 +32,23 @@ function readBaseTitle(): string {
   return base;
 }
 
+/**
+ * Client-side navigation for notification clicks, registered by the mounted
+ * hook so a banner click routes inside the SPA instead of reloading the app.
+ */
+let navigateOnClick: ((url: string) => void) | null = null;
+
 export function useChatNotifyingEffects({ selfUserId, rooms, callPhase }: Args) {
   const ringRef = useRef<RingLoop | null>(null);
+  const router = useRouter();
+
+  useEffect(() => {
+    const navigate = (url: string) => router.push(url);
+    navigateOnClick = navigate;
+    return () => {
+      if (navigateOnClick === navigate) navigateOnClick = null;
+    };
+  }, [router]);
 
   const totalUnread = useMemo(
     () => rooms.reduce((acc, r) => acc + (r.unreadCount ?? 0), 0),
@@ -254,7 +270,10 @@ function tryDirectNotification(
         } catch {
           /* focus blocked */
         }
-        if (args.url) window.location.href = args.url;
+        if (args.url) {
+          if (navigateOnClick) navigateOnClick(args.url);
+          else window.location.assign(args.url);
+        }
         n.close();
       };
     }

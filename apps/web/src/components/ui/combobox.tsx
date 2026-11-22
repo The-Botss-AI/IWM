@@ -29,6 +29,7 @@ export function Combobox({
   disabled,
   triggerClassName,
   id,
+  describedBy,
 }: {
   options: ComboboxOption[];
   value: string | null;
@@ -43,6 +44,8 @@ export function Combobox({
   triggerClassName?: string;
   /** Lets a <Label htmlFor> name the trigger. */
   id?: string;
+  /** ids of help / error text, read when the trigger is focused. */
+  describedBy?: string | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const selected = options.find((o) => o.value === value) ?? null;
@@ -55,6 +58,7 @@ export function Combobox({
           variant="outline"
           role="combobox"
           aria-expanded={open}
+          aria-describedby={describedBy}
           disabled={disabled}
           className={cn(
             'h-10 w-full justify-between font-normal',

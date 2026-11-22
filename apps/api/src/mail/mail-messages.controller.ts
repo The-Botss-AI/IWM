@@ -34,6 +34,7 @@ import {
 import type { Response } from 'express';
 import { z } from 'zod';
 
+import { RequireAddon } from '../addons/require-addon.decorator';
 import { CurrentUser, type AuthedUser } from '../common/decorators/current-user.decorator';
 import { SkipPermissions } from '../common/decorators/skip-permissions.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
@@ -46,6 +47,7 @@ const flagPatchSchema = z.object({
   op: z.enum(['read', 'unread', 'star', 'unstar']),
 });
 
+@RequireAddon('mail')
 @Controller('mail/messages')
 export class MailMessagesController {
   constructor(

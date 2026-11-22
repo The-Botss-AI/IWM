@@ -69,6 +69,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { useAddons } from '@/hooks/use-addons';
 import { useCrossOrgDmBlock } from '@/hooks/use-chat-requests';
 import { useRoomRealtime } from '@/hooks/use-chat-socket';
 import { useChatClearedBefore } from '@/hooks/use-chat-cleared-before';
@@ -128,6 +129,8 @@ export function ChatWindow({
   const cleared = useChatClearedBefore(currentUserId);
   // Cross-organization DM only: block / unblock the other person.
   const dmBlock = useCrossOrgDmBlock(room, currentUserId);
+  // Calls go through LiveKit: hidden while that add-on is switched off.
+  const callsOn = useAddons().isOn('livekit');
   const [confirmBlock, setConfirmBlock] = useState(false);
 
   const [typing, setTyping] = useState<TypingMap>({});
@@ -677,7 +680,7 @@ export function ChatWindow({
           >
             <Search className="h-4 w-4" />
           </Button>
-          {room.type !== 'TEXT_CHANNEL' ? (
+          {room.type !== 'TEXT_CHANNEL' && callsOn ? (
             <Button
               size="icon"
               variant="ghost"

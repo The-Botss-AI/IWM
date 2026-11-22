@@ -24,6 +24,7 @@ import { Label } from '@/components/ui/label';
 import { Loader } from '@/components/ui/loader';
 import { QueryError } from '@/components/ui/query-error';
 import { Textarea } from '@/components/ui/textarea';
+import { useAddons } from '@/hooks/use-addons';
 import {
   useCreateTimeEntry,
   useDeleteTimeEntry,
@@ -94,6 +95,7 @@ export default function TimesheetsPage() {
   const [editTarget, setEditTarget] = useState<TimeEntryWithMeta | null>(null);
 
   const runningEntry = running.data?.items[0] ?? null;
+  const hrOn = useAddons().isOn('hr');
 
   return (
     <div className="mx-auto h-[var(--app-content-h,calc(100vh-4rem))] w-full max-w-6xl overflow-y-auto px-4 py-6 sm:px-6">
@@ -105,12 +107,15 @@ export default function TimesheetsPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button asChild variant="secondary">
-            <Link href="/timesheets/leave">
-              <CalendarRange className="h-4 w-4" />
-              Time off
-            </Link>
-          </Button>
+          {/* Time off is the HR add-on's: hidden while it is switched off. */}
+          {hrOn ? (
+            <Button asChild variant="secondary">
+              <Link href="/timesheets/leave">
+                <CalendarRange className="h-4 w-4" />
+                Time off
+              </Link>
+            </Button>
+          ) : null}
           <Button
             id="timesheet-manual-toggle"
             variant="secondary"

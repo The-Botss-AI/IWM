@@ -4,8 +4,8 @@ import { useIsFetching, useIsMutating } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 
 /**
- * Thin progress strip pinned to the top of the viewport. Shows whenever any
- * TanStack Query request or mutation is in flight, so the user sees a
+ * Thin progress strip pinned to the top of the viewport. Shows while a query
+ * with no data yet is loading or a mutation is in flight, so the user sees a
  * heartbeat during slow API calls (the API can take a few seconds on a
  * cold container, otherwise the screen looks frozen). Auto-hides shortly
  * after all queries settle so it doesn't strobe on every tiny refetch.
@@ -14,7 +14,9 @@ import { useEffect, useState } from 'react';
  * via the React Query context. Pure UX hint - no business logic.
  */
 export function GlobalProgress() {
-  const fetching = useIsFetching();
+  // Only first loads count: background refetches (polls, invalidations) of a
+  // query that already has data would otherwise keep the bar flickering.
+  const fetching = useIsFetching({ predicate: (q) => q.state.data === undefined });
   const mutating = useIsMutating();
   const active = fetching + mutating;
   const [visible, setVisible] = useState(false);

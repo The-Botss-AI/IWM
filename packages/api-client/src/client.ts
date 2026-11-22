@@ -2,6 +2,7 @@ import type { z } from 'zod';
 import { problemDetailsSchema } from '@botss/shared-types';
 
 import { ApiError, fromProblem } from './errors.js';
+import { trimOneTrailingSlash, trimTrailingSlashes } from './trim-slashes.js';
 
 export interface ClientOptions {
   /** API base URL (e.g. http://localhost:4000). */
@@ -50,8 +51,8 @@ export class HttpClient {
   private readonly credentials: RequestCredentials;
 
   constructor(opts: ClientOptions) {
-    this.baseUrl = opts.baseUrl.replace(/\/+$/, '');
-    this.basePath = (opts.basePath ?? '/api/v1').replace(/\/?$/, '');
+    this.baseUrl = trimTrailingSlashes(opts.baseUrl);
+    this.basePath = trimOneTrailingSlash(opts.basePath ?? '/api/v1');
     this.fetchFn = opts.fetch ?? globalThis.fetch.bind(globalThis);
     this.getDefaultHeaders = opts.getDefaultHeaders ?? (() => ({}));
     this.credentials = opts.credentials ?? 'include';
@@ -85,6 +86,8 @@ export class HttpClient {
     schema: z.ZodSchema<T>,
     init: {
       body?: unknown;
+      /** Multipart body; the runtime sets the boundary header itself. */
+      form?: FormData;
       query?: Record<string, unknown>;
       headers?: Record<string, string>;
     } = {},
@@ -94,7 +97,7 @@ export class HttpClient {
       ...this.getDefaultHeaders(),
       ...(init.headers ?? {}),
     };
-    if (init.body !== undefined) headers['Content-Type'] = 'application/json';
+    if (init.body !== undefined && !init.form) headers['Content-Type'] = 'application/json';
 
     let res: Response;
     try {
@@ -102,7 +105,7 @@ export class HttpClient {
         method,
         headers,
         credentials: this.credentials,
-        body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+        body: init.form ?? (init.body !== undefined ? JSON.stringify(init.body) : undefined),
       });
     } catch {
       // Transport-level failure: fetch rejects when the server is unreachable
@@ -297,6 +300,10 @@ export class HttpClient {
     headers?: Record<string, string>,
   ): Promise<T> {
     return this.request<T>('POST', path, schema, { body, headers });
+  }
+  /** POST a multipart form (file uploads parsed in memory by the API, e.g. .ics import). */
+  postForm<T>(path: string, schema: z.ZodSchema<T>, form: FormData): Promise<T> {
+    return this.request<T>('POST', path, schema, { form });
   }
   patch<T>(path: string, schema: z.ZodSchema<T>, body?: unknown): Promise<T> {
     return this.request<T>('PATCH', path, schema, { body });

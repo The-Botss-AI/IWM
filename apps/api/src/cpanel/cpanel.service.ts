@@ -1,5 +1,7 @@
 import { HttpException, Injectable, Logger } from '@nestjs/common';
 
+import { isDemoMode } from '../common/demo-mode';
+
 /**
  * cPanel UAPI client. Talks to the cPanel server's Email module over HTTPS
  * using a server-side API token. Used by the admin user-management flows to
@@ -55,6 +57,8 @@ export class CpanelService {
   }
 
   isEnabled(): boolean {
+    // A public demo never provisions real mailboxes.
+    if (isDemoMode()) return false;
     return !!(this.host && this.user && this.token && this.domain);
   }
 
@@ -169,6 +173,10 @@ export class CpanelService {
     fn: string,
     params: Record<string, string>,
   ): Promise<UapiResponse> {
+    if (isDemoMode()) {
+      this.logger.log(`Demo mode: cPanel ${mod}/${fn} skipped, outgoing calls are turned off.`);
+      return { status: 0, errors: ['cPanel is turned off in the live demo'] };
+    }
     const url = `https://${this.host}:${this.port}/execute/${mod}/${fn}`;
     const body = new URLSearchParams(params).toString();
     let res: Response;

@@ -4,14 +4,15 @@ import { Prisma } from '@botss/database';
  * Full-text search building blocks for global search. Pure: no Prisma calls,
  * so `scripts/check-search.ts` can check them without a database.
  *
- * `FTS` repeats the expression of every `*_fts_idx` GIN index from
- * packages/database/prisma/migrations/20261026130000_search_fulltext_indexes
- * CHARACTER FOR CHARACTER. Postgres only uses an expression index when the
+ * `FTS` repeats the expression of every `*_fts_idx` GIN index (the optional
+ * full-text index migration, see "Not included" in the README) CHARACTER FOR
+ * CHARACTER. Postgres only uses an expression index when the
  * query spells the same expression, so an "equivalent" rewrite here silently
  * turns every search into a sequential scan. Columns are unqualified on
  * purpose (the index has no table alias); every query that uses one keeps the
  * indexed table as the only relation whose columns those names can resolve to.
- * The check script fails if a fragment is not found verbatim in the migration.
+ * When that migration is present, the check script fails if a fragment is not
+ * found verbatim in it.
  */
 export const FTS_EXPRESSIONS = {
   message: `to_tsvector('simple'::regconfig, left(coalesce("content", ''), 100000))`,

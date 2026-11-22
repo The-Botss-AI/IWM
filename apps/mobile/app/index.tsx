@@ -17,7 +17,11 @@ import * as Sharing from 'expo-sharing';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView, type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
 
-import { ensureAndroidChannels, registerForPushTokenAsync } from '../lib/push';
+import {
+  ensureAndroidChannels,
+  ensureNotificationCategories,
+  registerForPushTokenAsync,
+} from '../lib/push';
 
 /**
  * The mobile app is a thin native shell: a full-screen WebView pointed at the
@@ -69,7 +73,7 @@ function isAppUrl(url: string): boolean {
 // Show banners even when the app is foregrounded (background/killed delivery is
 // handled by the OS). Module scope so it's set once before any notification.
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
+  handleNotification: async (notification) => ({
     // SDK 52 deprecated shouldShowAlert in favour of shouldShowBanner +
     // shouldShowList; set all three so the heads-up banner shows in the
     // foreground on both old and new expo-notifications behaviours (sound alone
@@ -77,7 +81,11 @@ Notifications.setNotificationHandler({
     shouldShowAlert: true,
     shouldShowBanner: true,
     shouldShowList: true,
-    shouldPlaySound: true,
+    // Silent calls (Do Not Disturb) never play a sound, even in the foreground.
+    // Meeting reminders always ring, even when the app would stay quiet.
+    shouldPlaySound:
+      notification.request.content.data?.type === 'meeting-reminder' ||
+      notification.request.content.data?.silent !== true,
     shouldSetBadge: false,
   }),
 });
@@ -87,6 +95,9 @@ Notifications.setNotificationHandler({
 // back - DNS fails (net::ERR_NAME_NOT_RESOLVED) a second or two before it
 // would have succeeded.
 const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000];
+// After the schedule above runs out, keep retrying at this interval while the
+// error screen shows, so the app recovers once the network is back.
+const STEADY_RETRY_MS = 15000;
 
 /**
  * Resolve a notification's `url` to an absolute app URL, or null when it is
@@ -115,6 +126,68 @@ function readResponse(
   };
 }
 
+/** The call a Decline tap refers to, or null when the tap is anything else. */
+function readDecline(
+  resp: Notifications.NotificationResponse | null | undefined,
+): { id: string; callId: string } | null {
+  if (!resp || resp.actionIdentifier !== 'decline') return null;
+  const callId = resp.notification.request.content.data?.callId;
+  if (typeof callId !== 'string' || !callId) return null;
+  return { id: resp.notification.request.identifier, callId };
+}
+
+/** What a Join or Snooze tap on a meeting reminder refers to, or null. */
+function readMeetingAction(resp: Notifications.NotificationResponse | null | undefined): {
+  id: string;
+  action: 'join' | 'snooze';
+  deliveryId: string | null;
+  meetingUrl: string | null;
+  url: string | null;
+} | null {
+  if (!resp) return null;
+  if (resp.actionIdentifier !== 'join' && resp.actionIdentifier !== 'snooze') return null;
+  const data = resp.notification.request.content.data;
+  if (data?.type !== 'meeting-reminder') return null;
+  const snooze: unknown = data.snooze;
+  const deliveryId =
+    typeof snooze === 'object' &&
+    snooze !== null &&
+    typeof (snooze as { deliveryId?: unknown }).deliveryId === 'string'
+      ? (snooze as { deliveryId: string }).deliveryId
+      : null;
+  const rawMeeting: unknown = data.meetingUrl;
+  const meetingUrl =
+    typeof rawMeeting === 'string' && /^https?:\/\//i.test(rawMeeting) ? rawMeeting : null;
+  return {
+    id: resp.notification.request.identifier,
+    action: resp.actionIdentifier,
+    deliveryId,
+    meetingUrl,
+    url: toAppUrl(data.url),
+  };
+}
+
+/** The app URL with `?snooze=<deliveryId>`, which the page turns into a snooze call. */
+function withSnooze(url: string, deliveryId: string): string {
+  const u = new URL(url);
+  u.searchParams.set('snooze', deliveryId);
+  return u.toString();
+}
+
+/** Remove presented notifications for a call that is over. */
+async function dismissCallNotifications(callId: string): Promise<void> {
+  try {
+    const presented = await Notifications.getPresentedNotificationsAsync();
+    await Promise.all(
+      presented
+        .filter((n) => n.request.content.data?.callId === callId)
+        .map((n) => Notifications.dismissNotificationAsync(n.request.identifier)),
+    );
+  } catch {
+    /* best effort - the notification times out on its own */
+  }
+}
+
 /**
  * Strip anything that could escape the cache directory or upset the platform
  * file APIs. The name arrives from an email attachment, so it is attacker
@@ -139,6 +212,9 @@ export default function HomeScreen() {
   // A tap that arrives while the WebView is loading (or failed to load) is
   // parked here and flushed once a load succeeds.
   const pendingUrl = useRef<string | null>(null);
+  // Declines tapped while the WebView is not ready; sent once it is.
+  const pendingDeclines = useRef(new Set<string>());
+  const pendingSnoozes = useRef(new Set<string>());
   // Cold start and the response listener can both report the tap that
   // launched the app; remember which ones were handled.
   const handledTaps = useRef(new Set<string>());
@@ -233,11 +309,16 @@ export default function HomeScreen() {
       filename?: string;
       mimeType?: string;
       base64?: string;
+      callId?: string;
     };
     try {
       payload = JSON.parse(event.nativeEvent.data);
     } catch {
       return; // Not ours - the web app may post other things later.
+    }
+    if (payload.type === 'botss:call-ended') {
+      if (typeof payload.callId === 'string') void dismissCallNotifications(payload.callId);
+      return;
     }
     if (payload.type !== 'botss:save-file') return;
     if (!payload.base64) return;
@@ -292,9 +373,77 @@ export default function HomeScreen() {
     webRef.current?.reload();
   }, [clearRetry]);
 
+  // Hand a Decline to the web app, which emits `call_reject` on its socket
+  // (the shell has no session token). Never navigates to the call.
+  const declineCall = useCallback((callId: string) => {
+    const id = JSON.stringify(callId);
+    webRef.current?.injectJavaScript(
+      // Queued on window too: right after load the page may not have mounted
+      // its listener yet, and it drains the queue when it does.
+      `(function(){(window.__BOTSS_CALL_DECLINES__=window.__BOTSS_CALL_DECLINES__||[]).push(${id});` +
+        `window.dispatchEvent(new CustomEvent('botss:call-decline',{detail:{callId:${id}}}));})();true;`,
+    );
+  }, []);
+
+  // Hand a meeting Snooze to the web app, which calls the API as the signed-in
+  // user (the shell has no session token). Queued on window like declines.
+  const snoozeMeeting = useCallback((deliveryId: string) => {
+    const id = JSON.stringify(deliveryId);
+    webRef.current?.injectJavaScript(
+      `(function(){(window.__BOTSS_MEETING_SNOOZES__=window.__BOTSS_MEETING_SNOOZES__||[]).push(${id});` +
+        `window.dispatchEvent(new CustomEvent('botss:meeting-snooze',{detail:{deliveryId:${id}}}));})();true;`,
+    );
+  }, []);
+
+  // Join / Snooze taps on a meeting reminder.
+  const handleMeetingAction = useCallback(
+    (m: NonNullable<ReturnType<typeof readMeetingAction>>): void => {
+      // The tap leaves the delivered notification in the tray; clear it.
+      void Notifications.dismissNotificationAsync(m.id).catch(() => undefined);
+      if (m.action === 'join') {
+        if (m.meetingUrl) {
+          void Linking.openURL(m.meetingUrl);
+        } else if (m.url) {
+          if (webLoaded.current) {
+            navigateTo(m.url);
+          } else {
+            pendingUrl.current = m.url;
+            if (loadFailed.current) retryLoad();
+          }
+        }
+        return;
+      }
+      if (!m.deliveryId) return;
+      if (webLoaded.current) {
+        snoozeMeeting(m.deliveryId);
+      } else {
+        pendingSnoozes.current.add(m.deliveryId);
+        if (loadFailed.current) retryLoad();
+      }
+    },
+    [navigateTo, retryLoad, snoozeMeeting],
+  );
+
+  // A Decline tap: send it now if the page is loaded, else hold it for onLoad.
+  // Either way the notification goes away.
+  const handleDecline = useCallback(
+    (callId: string) => {
+      if (webLoaded.current) {
+        declineCall(callId);
+      } else {
+        pendingDeclines.current.add(callId);
+        // Sitting on a failed load: try again now, the user is looking at it.
+        if (loadFailed.current) retryLoad();
+      }
+      void dismissCallNotifications(callId);
+    },
+    [declineCall, retryLoad],
+  );
+
   // Register for push once, set up Android channels, and wire tap handling.
   useEffect(() => {
     void ensureAndroidChannels();
+    void ensureNotificationCategories();
     void registerForPushTokenAsync().then((token) => {
       if (!token) return;
       pushToken.current = token;
@@ -311,6 +460,32 @@ export default function HomeScreen() {
     };
     void Notifications.getLastNotificationResponseAsync()
       .then((resp) => {
+        // A Decline that launched the app: decline, but load the home page,
+        // not the call.
+        const meeting = readMeetingAction(resp);
+        if (meeting) {
+          handledTaps.current.add(meeting.id);
+          void Notifications.dismissNotificationAsync(meeting.id).catch(() => undefined);
+          if (meeting.action === 'join' && meeting.meetingUrl) {
+            void Linking.openURL(meeting.meetingUrl);
+            start(null);
+          } else if (meeting.action === 'join') {
+            start(meeting.url);
+          } else if (meeting.deliveryId) {
+            // Cold start: the first load carries ?snooze= for the page to handle.
+            start(withSnooze(meeting.url ?? APP_URL, meeting.deliveryId));
+          } else {
+            start(null);
+          }
+          return;
+        }
+        const decline = readDecline(resp);
+        if (decline) {
+          handledTaps.current.add(decline.id);
+          handleDecline(decline.callId);
+          start(null);
+          return;
+        }
         const tap = readResponse(resp);
         if (tap) handledTaps.current.add(tap.id);
         // The listener may have parked this same tap already; the first load
@@ -324,6 +499,22 @@ export default function HomeScreen() {
 
     // Tap while the app is running (foreground/background).
     const sub = Notifications.addNotificationResponseReceivedListener((resp) => {
+      const meeting = readMeetingAction(resp);
+      if (meeting) {
+        if (handledTaps.current.has(meeting.id)) return;
+        handledTaps.current.add(meeting.id);
+        handleMeetingAction(meeting);
+        return;
+      }
+      if (resp.actionIdentifier === 'join' || resp.actionIdentifier === 'snooze') return;
+      const decline = readDecline(resp);
+      if (decline) {
+        if (handledTaps.current.has(decline.id)) return;
+        handledTaps.current.add(decline.id);
+        handleDecline(decline.callId);
+        return;
+      }
+      if (resp.actionIdentifier === 'decline') return;
       const tap = readResponse(resp);
       if (!tap || handledTaps.current.has(tap.id)) return;
       handledTaps.current.add(tap.id);
@@ -341,7 +532,7 @@ export default function HomeScreen() {
       clearTimeout(fallback);
       sub.remove();
     };
-  }, [navigateTo, retryLoad, sendPushToken]);
+  }, [handleDecline, handleMeetingAction, navigateTo, retryLoad, sendPushToken]);
 
   // Coming back to the foreground on a failed load (e.g. the network was off
   // while backgrounded) retries straight away.
@@ -409,16 +600,19 @@ export default function HomeScreen() {
         navigateTo(pendingUrl.current);
         pendingUrl.current = null;
       }
+      for (const callId of pendingDeclines.current) declineCall(callId);
+      pendingDeclines.current.clear();
+      for (const deliveryId of pendingSnoozes.current) snoozeMeeting(deliveryId);
+      pendingSnoozes.current.clear();
     },
-    [announceCapabilities, clearRetry, navigateTo, sendPushToken],
+    [announceCapabilities, clearRetry, declineCall, navigateTo, sendPushToken, snoozeMeeting],
   );
 
   const onError = useCallback(() => {
     webLoaded.current = false;
     loadFailed.current = true;
     clearRetry();
-    const delay = RETRY_DELAYS_MS[retryCount.current];
-    if (delay === undefined) return; // Out of auto-retries; the error screen has a button.
+    const delay = RETRY_DELAYS_MS[retryCount.current] ?? STEADY_RETRY_MS;
     retryCount.current += 1;
     retryTimer.current = setTimeout(retryLoad, delay);
   }, [clearRetry, retryLoad]);

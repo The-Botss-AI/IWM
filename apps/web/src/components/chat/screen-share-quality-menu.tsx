@@ -6,9 +6,9 @@ import { useState } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   SCREEN_SHARE_QUALITY_ORDER,
-  SCREEN_SHARE_QUALITY_PROFILES,
+  SCREEN_SHARE_QUALITY_META,
   type ScreenShareQuality,
-} from '@/lib/screen-share-quality';
+} from '@/lib/screen-share-quality-meta';
 import { cn } from '@/lib/utils';
 
 interface Props {
@@ -35,7 +35,7 @@ export function ScreenShareQualityMenu({
   sharing = false,
 }: Props) {
   const [open, setOpen] = useState(false);
-  const active = SCREEN_SHARE_QUALITY_PROFILES[value];
+  const active = SCREEN_SHARE_QUALITY_META[value];
   const dark = variant === 'overlay';
 
   return (
@@ -56,7 +56,7 @@ export function ScreenShareQualityMenu({
       <PopoverContent align="center" side="top" className="w-72">
         <div className="text-ink-muted px-2 py-1.5 text-xs font-semibold">Screen share quality</div>
         {SCREEN_SHARE_QUALITY_ORDER.map((id) => {
-          const profile = SCREEN_SHARE_QUALITY_PROFILES[id];
+          const profile = SCREEN_SHARE_QUALITY_META[id];
           const selected = id === value;
           return (
             <button

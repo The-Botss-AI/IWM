@@ -4,6 +4,18 @@ import {
   type TrackPublishOptions,
 } from 'livekit-client';
 
+import {
+  SCREEN_SHARE_QUALITY_META,
+  type ScreenShareQuality,
+  type ScreenShareQualityMeta,
+} from './screen-share-quality-meta';
+
+export {
+  DEFAULT_SCREEN_SHARE_QUALITY,
+  SCREEN_SHARE_QUALITY_ORDER,
+  type ScreenShareQuality,
+} from './screen-share-quality-meta';
+
 /**
  * Screen-share quality profiles. Picking one trades sharpness against
  * smoothness; the three presets cover the common cases:
@@ -18,16 +30,7 @@ import {
  * the call UI - so the hook and both share surfaces stay in sync (no business
  * logic in components).
  */
-export type ScreenShareQuality = 'detail' | 'motion' | 'performance';
-
-export interface ScreenShareQualityProfile {
-  id: ScreenShareQuality;
-  /** Menu label. */
-  label: string;
-  /** One-line explanation shown under the label. */
-  description: string;
-  /** Compact resolution/fps line (e.g. "1080p · 15fps"). */
-  spec: string;
+export interface ScreenShareQualityProfile extends ScreenShareQualityMeta {
   /** Constraints handed to `getDisplayMedia`. */
   capture: ScreenShareCaptureOptions;
   /** Encoding + degradation options handed to LiveKit on publish. */
@@ -37,10 +40,7 @@ export interface ScreenShareQualityProfile {
 export const SCREEN_SHARE_QUALITY_PROFILES: Record<ScreenShareQuality, ScreenShareQualityProfile> =
   {
     detail: {
-      id: 'detail',
-      label: 'Detail / Document',
-      description: 'Sharpest text for docs, code, and slides.',
-      spec: '1080p · 15fps',
+      ...SCREEN_SHARE_QUALITY_META.detail,
       capture: {
         resolution: { width: 1920, height: 1080, frameRate: 15 },
         // 'detail' tells the encoder to preserve spatial quality over motion.
@@ -53,10 +53,7 @@ export const SCREEN_SHARE_QUALITY_PROFILES: Record<ScreenShareQuality, ScreenSha
       },
     },
     motion: {
-      id: 'motion',
-      label: 'Standard Motion',
-      description: 'Balanced quality for everyday screen sharing.',
-      spec: '720p · 30fps',
+      ...SCREEN_SHARE_QUALITY_META.motion,
       capture: {
         resolution: { width: 1280, height: 720, frameRate: 30 },
         contentHint: 'motion',
@@ -67,10 +64,7 @@ export const SCREEN_SHARE_QUALITY_PROFILES: Record<ScreenShareQuality, ScreenSha
       },
     },
     performance: {
-      id: 'performance',
-      label: 'High Performance',
-      description: 'Smoothest motion for video and animation.',
-      spec: '1080p · 60fps',
+      ...SCREEN_SHARE_QUALITY_META.performance,
       capture: {
         resolution: { width: 1920, height: 1080, frameRate: 60 },
         contentHint: 'motion',
@@ -84,9 +78,3 @@ export const SCREEN_SHARE_QUALITY_PROFILES: Record<ScreenShareQuality, ScreenSha
       },
     },
   };
-
-/** Default profile: optimise for legible text, matching most CRM screen shares. */
-export const DEFAULT_SCREEN_SHARE_QUALITY: ScreenShareQuality = 'detail';
-
-/** Stable order for rendering the picker. */
-export const SCREEN_SHARE_QUALITY_ORDER: ScreenShareQuality[] = ['detail', 'motion', 'performance'];

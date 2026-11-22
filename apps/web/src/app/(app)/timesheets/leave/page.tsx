@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { useState } from 'react';
 import type { LeaveWithRefs } from '@botss/shared-types';
 
+import { AddonOffNotice } from '@/components/addons/addon-off-notice';
+import { useAddons } from '@/hooks/use-addons';
 import { LeaveTable } from '@/components/leave/leave-table';
 import { RequestLeaveDialog } from '@/components/leave/request-leave-dialog';
 import { Button } from '@/components/ui/button';
@@ -18,7 +20,7 @@ import { formatLeaveRange } from '@/lib/leave';
  * Employee time off: request leave, follow your requests, cancel one that
  * HR hasn't decided yet. The server scopes the list to the caller.
  */
-export default function TimeOffPage() {
+function TimeOffPageContent() {
   const leaves = useMyLeaves();
   const remove = useDeleteLeave();
   const [requestOpen, setRequestOpen] = useState(false);
@@ -108,4 +110,11 @@ export default function TimeOffPage() {
       />
     </div>
   );
+}
+
+/** Hidden while the organization has the HR add-on switched off. */
+export default function TimeOffPage() {
+  const addons = useAddons();
+  if (!addons.isOn('hr')) return <AddonOffNotice name="HR" />;
+  return <TimeOffPageContent />;
 }

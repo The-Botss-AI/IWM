@@ -51,6 +51,7 @@ import { AttendanceCronService } from '../hr/attendance-cron.service';
 import { AttendanceService } from '../hr/attendance.service';
 import { TimesheetWarningCronService } from '../hr/timesheet-warning-cron.service';
 import { LeadFollowupCronService } from '../leads/lead-followup-cron.service';
+import { MeetingReminderCronService } from '../meetings/meeting-reminder-cron.service';
 import { ImapIdleService } from '../mail/imap-idle.service';
 import { MAIL_EVENT_TOPIC, MailEventsService, type MailEvent } from '../mail/mail-events.service';
 import {
@@ -152,6 +153,10 @@ async function main(): Promise<void> {
             useValue: new LeadFollowupCronService(noDb as never),
           },
           {
+            provide: MeetingReminderCronService,
+            useValue: new MeetingReminderCronService(noDb as never),
+          },
+          {
             provide: ImapIdleService,
             // Role 'api' here so its boot refresh never runs; this part only
             // looks at which @Interval timers the scheduler mounts.
@@ -169,6 +174,7 @@ async function main(): Promise<void> {
       assert.deepEqual(crons, [
         'daily-attendance',
         'lead-followup-reminders',
+        'meeting-reminders',
         'probe-cron',
         'timesheet-warnings',
       ]);

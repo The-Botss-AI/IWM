@@ -57,6 +57,10 @@ export const auditActionSchema = z.enum([
   'support.grant_revoked',
   'support.access',
   'support.session_started',
+  'addon.updated',
+  'org.domain_added',
+  'org.domain_verified',
+  'org.domain_removed',
 ]);
 export type AuditAction = z.infer<typeof auditActionSchema>;
 
@@ -93,10 +97,10 @@ export const auditLogEntrySchema = z.object({
   action: z.string(),
   target: z.string().nullable(),
   targetLabel: auditTargetLabelSchema.nullable(),
-  metadata: z.record(z.unknown()),
+  metadata: z.record(z.string(), z.unknown()),
   /** Display names for the ids that appear in `target` and `metadata`,
    *  keyed by id. Only records in the entry's own organization resolve. */
-  labels: z.record(z.string()),
+  labels: z.record(z.string(), z.string()),
   createdAt: z.coerce.date(),
   actorUser: userSummarySchema.nullable(),
 });

@@ -135,7 +135,7 @@ let untaggedNotificationSeq = 0;
 /** A ringing call banner is closed after this; the call has timed out by then. */
 const CALL_BANNER_MAX_MS = 60_000;
 
-type NotifyType = 'message' | 'call' | 'generic';
+type NotifyType = 'message' | 'call' | 'meeting-reminder' | 'generic';
 interface NotifyArgs {
   title: string;
   body: string;
@@ -154,7 +154,8 @@ function parseNotifyArgs(raw: unknown): NotifyArgs | null {
   const r = raw as Record<string, unknown>;
   const title = cappedString(r.title, 200);
   if (!title) return null;
-  const type = r.type === 'call' || r.type === 'message' ? r.type : 'generic';
+  const type =
+    r.type === 'call' || r.type === 'message' || r.type === 'meeting-reminder' ? r.type : 'generic';
   return {
     title,
     body: cappedString(r.body, 500) ?? '',
@@ -225,6 +226,7 @@ function showNotification(args: NotifyArgs): void {
     ? path.join(process.resourcesPath, 'icon.png')
     : path.join(__dirname, '..', 'build', 'icon.png');
   const isCall = args.type === 'call';
+  const isReminder = args.type === 'meeting-reminder';
   const n = new Notification({
     title: args.title,
     body: args.body,
@@ -232,6 +234,11 @@ function showNotification(args: NotifyArgs): void {
     // A ringing call stays on screen until answered or dismissed, like the
     // phone's call notification (Windows/Linux; macOS uses its own setting).
     ...(isCall ? { timeoutType: 'never' as const, urgency: 'critical' as const } : {}),
+    // A meeting reminder stays up with sound until clicked or dismissed, and
+    // is not closed when the window gains focus (unlike call banners).
+    ...(isReminder
+      ? { timeoutType: 'never' as const, urgency: 'critical' as const, silent: false }
+      : {}),
   });
 
   const key = args.tag ?? `untagged:${(untaggedNotificationSeq += 1)}`;
@@ -304,7 +311,60 @@ function handleDeepLink(rawUrl: string | undefined): void {
   const target = deepLinkToAppUrl(rawUrl);
   if (!isAppOrigin(target)) return;
   showWindow();
+  // A new target starts the offline backoff from its first, short step.
+  clearOfflineRetry();
+  offlineRetryCount = 0;
   mainWindow?.loadURL(target);
+}
+
+const OFFLINE_RETRY_MS = [2000, 5000, 10000];
+const OFFLINE_RETRY_STEADY_MS = 30000;
+let offlineRetryTimer: NodeJS.Timeout | null = null;
+let offlineRetryCount = 0;
+
+function clearOfflineRetry(): void {
+  if (offlineRetryTimer) clearTimeout(offlineRetryTimer);
+  offlineRetryTimer = null;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
+/**
+ * Inline page shown when the app URL cannot be loaded. It is a data: URL, so
+ * its origin is opaque and never matches isAppOrigin: it gets no permissions
+ * and no IPC (the sender check in botss:notify rejects it). Its button is a
+ * plain link back to the app URL, which will-navigate allows.
+ */
+function offlinePageUrl(retryUrl: string): string {
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Botss</title></head>
+<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#FDF0F5;color:#1a1a2e;text-align:center">
+<div style="padding:24px;max-width:420px">
+<h1 style="font-size:20px;font-weight:600;margin:0">Can't reach Botss</h1>
+<p style="margin:8px 0 0;font-size:14px;opacity:.7">Check your internet connection. We'll keep trying.</p>
+<a href="${escapeHtml(retryUrl)}" style="display:inline-block;margin-top:24px;padding:10px 20px;border-radius:9999px;font-size:14px;font-weight:500;color:#fff;text-decoration:none;background:linear-gradient(135deg,#7C3AED,#DB2777)">Try again</a>
+</div></body></html>`;
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+}
+
+function showOfflinePage(win: BrowserWindow, failedUrl: string): void {
+  clearOfflineRetry();
+  win.loadURL(offlinePageUrl(failedUrl)).catch(() => {});
+  const delay = OFFLINE_RETRY_MS[offlineRetryCount] ?? OFFLINE_RETRY_STEADY_MS;
+  offlineRetryCount += 1;
+  const retry = (): void => {
+    offlineRetryTimer = null;
+    if (win.isDestroyed()) return;
+    // A deep link or the user's own navigation is still loading: let it
+    // finish instead of aborting it with this retry.
+    if (win.webContents.isLoading()) {
+      offlineRetryTimer = setTimeout(retry, delay);
+      return;
+    }
+    win.loadURL(failedUrl).catch(() => {}); // failure re-enters did-fail-load
+  };
+  offlineRetryTimer = setTimeout(retry, delay);
 }
 
 function createWindow(initialUrl: string = APP_URL): void {
@@ -334,6 +394,24 @@ function createWindow(initialUrl: string = APP_URL): void {
   // Navigation guards live in the app-wide 'web-contents-created' handler.
   void mainWindow.loadURL(initialUrl);
 
+  // Main-frame load failures (offline, DNS, timeout): show a small offline page
+  // and keep retrying the app URL. -3 is ERR_ABORTED (a superseded navigation).
+  mainWindow.webContents.on(
+    'did-fail-load',
+    (_event, errorCode, _description, validatedURL, isMainFrame) => {
+      if (!isMainFrame || errorCode === -3) return;
+      if (!mainWindow || mainWindow.isDestroyed() || !isAppOrigin(validatedURL)) return;
+      showOfflinePage(mainWindow, validatedURL);
+    },
+  );
+  mainWindow.webContents.on('did-finish-load', () => {
+    // The offline page itself is a data: URL; only a real app load ends retrying.
+    if (isAppOrigin(mainWindow?.webContents.getURL())) {
+      clearOfflineRetry();
+      offlineRetryCount = 0;
+    }
+  });
+
   // Close-to-tray: the window hides instead of quitting so notifications keep
   // firing. Real quit goes through the tray menu / before-quit.
   mainWindow.on('close', (event) => {
@@ -346,6 +424,7 @@ function createWindow(initialUrl: string = APP_URL): void {
   mainWindow.on('focus', closeCallNotifications);
 
   mainWindow.on('closed', () => {
+    clearOfflineRetry();
     mainWindow = null;
   });
 }

@@ -3,6 +3,10 @@
 import {
   Bell,
   BellRing,
+  CalendarCheck,
+  CalendarClock,
+  CalendarPlus,
+  CalendarX,
   CheckCheck,
   CheckSquare,
   MessageSquare,
@@ -16,6 +20,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { UserAvatar } from '@/components/ui/avatar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  canRequestNotificationPermission,
+  requestNotificationPermission,
+} from '@/hooks/use-desktop-notifications';
 import { useInAppNotifications } from '@/hooks/use-in-app-notifications';
 import {
   useMarkAllNotificationsRead,
@@ -60,6 +68,9 @@ export function NotificationBell({
 } = {}) {
   const [open, setOpen] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
+  // Desktop alerts need a user gesture to request permission, so the prompt
+  // lives here as a button instead of firing on page load.
+  const [canEnableAlerts, setCanEnableAlerts] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // Server-side rows the user chose to hide locally - see the comment in
   // the action bar handler below.
@@ -78,12 +89,18 @@ export function NotificationBell({
         id: `srv:${n.id}`,
         rawId: n.id,
         source: 'server',
-        kind: n.type === 'TASK_COMMENT' ? 'comment' : 'task',
+        kind: bellKind(n.type),
         title: n.title,
         body: n.body,
         // Prefer the explicit deep-link (set for all the cross-app
         // notification types); fall back to the task link, then dashboard.
-        url: n.url ?? (n.taskId ? `/tasks/${n.taskId}` : '/dashboard'),
+        url:
+          n.url ??
+          (n.entityType === 'meeting' && n.entityId
+            ? `/meetings/${n.entityId}`
+            : n.taskId
+              ? `/tasks/${n.taskId}`
+              : '/dashboard'),
         createdAt: n.createdAt.getTime(),
         readAt: n.readAt ? n.readAt.getTime() : null,
         actorImage: n.actor?.image ?? null,
@@ -201,8 +218,10 @@ export function NotificationBell({
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
-        if (next) void refetch();
-        else {
+        if (next) {
+          void refetch();
+          setCanEnableAlerts(canRequestNotificationPermission());
+        } else {
           setSelectMode(false);
           setSelected(new Set());
         }
@@ -269,6 +288,23 @@ export function NotificationBell({
           </div>
         </header>
 
+        {canEnableAlerts ? (
+          <div className="border-line bg-bg-subtle text-ink-muted flex items-center justify-between gap-2 border-b px-4 py-2 text-xs">
+            <span>Get desktop alerts for new activity.</span>
+            <button
+              type="button"
+              onClick={() => {
+                void requestNotificationPermission().then(() =>
+                  setCanEnableAlerts(canRequestNotificationPermission()),
+                );
+              }}
+              className="text-ink hover:bg-bg-surface focus-visible:shadow-focus rounded px-2 py-1 text-xs font-medium focus-visible:outline-none"
+            >
+              Enable
+            </button>
+          </div>
+        ) : null}
+
         {selectMode ? (
           <div className="border-line bg-bg-subtle text-ink-muted flex items-center justify-between gap-2 border-b px-4 py-2 text-xs">
             <span>{selected.size > 0 ? `${selected.size} selected` : 'Tap rows to select'}</span>
@@ -317,11 +353,38 @@ export function NotificationBell({
   );
 }
 
+type MeetingBellKind =
+  | 'meeting-invite'
+  | 'meeting-update'
+  | 'meeting-cancelled'
+  | 'meeting-rsvp'
+  | 'meeting-reminder';
+
+/** Icon kind of a server notification row. */
+function bellKind(type: string): UnifiedRow['kind'] {
+  switch (type) {
+    case 'TASK_COMMENT':
+      return 'comment';
+    case 'MEETING_INVITE':
+      return 'meeting-invite';
+    case 'MEETING_UPDATED':
+      return 'meeting-update';
+    case 'MEETING_CANCELLED':
+      return 'meeting-cancelled';
+    case 'MEETING_RSVP':
+      return 'meeting-rsvp';
+    case 'MEETING_REMINDER':
+      return 'meeting-reminder';
+    default:
+      return 'task';
+  }
+}
+
 interface UnifiedRow {
   id: string;
   rawId: string;
   source: 'server' | 'client';
-  kind: 'task' | 'comment' | InAppNotification['kind'];
+  kind: 'task' | 'comment' | MeetingBellKind | InAppNotification['kind'];
   title: string;
   body: string;
   url: string;
@@ -349,6 +412,16 @@ function NotificationRow({ row, selectMode, selected, onClick }: RowProps) {
         return MessageSquare;
       case 'call-missed':
         return PhoneMissed;
+      case 'meeting-invite':
+        return CalendarPlus;
+      case 'meeting-cancelled':
+        return CalendarX;
+      case 'meeting-rsvp':
+        return CalendarCheck;
+      case 'meeting-reminder':
+        return BellRing;
+      case 'meeting-update':
+        return CalendarClock;
       case 'task':
       case 'comment':
       default:
