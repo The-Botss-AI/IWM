@@ -10,8 +10,9 @@
  *          --to-schema-datamodel`), upgraded only by purely additive changes
  *          (it stops and prints the SQL if anything would be dropped, renamed
  *          or deleted), and then marked as having the shipped migrations
- *          (`prisma migrate resolve --applied`). Its old local migrations are
- *          moved to packages/database/prisma/migrations-backup/.
+ *          (the rows `prisma migrate resolve --applied` writes, in one
+ *          transaction). Its old local migrations are moved to
+ *          packages/database/prisma/migrations-backup/.
  *   2. Seeds the demo data while the database has no users, so a deleted
  *      demo admin is not brought back on the next start.
  *

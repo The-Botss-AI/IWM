@@ -1339,7 +1339,7 @@ export class PayrollService {
     });
     return {
       organizationId: ws.organizationId,
-      baseCurrency: ws.organization?.baseCurrency ?? 'PKR',
+      baseCurrency: ws.organization?.baseCurrency ?? 'USD',
     };
   }
 
