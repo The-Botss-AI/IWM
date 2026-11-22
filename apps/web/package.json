@@ -70,7 +70,7 @@
     "react": "^19.2.9",
     "react-day-picker": "^10.0.0",
     "react-dom": "^19.2.9",
-    "react-easy-crop": "^5.1.0",
+    "react-easy-crop": "^6.2.5",
     "react-hook-form": "^7.54.1",
     "react-leaflet": "^5.0.0",
     "read-excel-file": "9.3.10",
