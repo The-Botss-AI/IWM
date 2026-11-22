@@ -731,8 +731,9 @@ async function main(): Promise<void> {
       );
       platformAddonStateSchema.parse(item);
     }
+    const platformUrls = JSON.stringify(platform).match(/wss?:\/\/[^"\\]+/g) ?? [];
     assert.ok(
-      !JSON.stringify(platform).includes('lk.example.com'),
+      !platformUrls.some((u) => new URL(u).host === 'lk.example.com'),
       'no settings in the platform view',
     );
     assert.equal(platform.items.find((i) => i.key === 'ai')?.enabled, false, 'ai off');

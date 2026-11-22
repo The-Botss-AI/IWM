@@ -22,7 +22,7 @@
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "lint": "echo 'lint defers to root' && exit 0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "echo 'no tests yet' && exit 0",
+    "test": "node scripts/check-trim-slashes.mjs",
     "clean": "rimraf dist .turbo *.tsbuildinfo || exit 0"
   },
   "dependencies": {
