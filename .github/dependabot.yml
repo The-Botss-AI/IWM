@@ -6,9 +6,24 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    # The mobile app pins these to its Expo SDK (52). They move together with
+    # `npx expo install` when the SDK is upgraded; bumped one by one they break
+    # the native app, which CI does not build.
+    ignore:
+      - dependency-name: 'expo'
+      - dependency-name: 'expo-*'
+      - dependency-name: '@expo/*'
+      - dependency-name: 'react-native'
+      - dependency-name: 'react-native-*'
+      - dependency-name: '@react-native/*'
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+        # A Prettier release reformats the repo, so it fails `format:check` on
+        # its own. It gets its own PR, where the reformat can be committed.
+        exclude-patterns:
+          - 'prettier'
+          - 'prettier-plugin-*'
 
   - package-ecosystem: github-actions
     directory: /
