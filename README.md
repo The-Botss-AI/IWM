@@ -17,7 +17,7 @@ IWM is a TypeScript monorepo: a NestJS API, a Next.js web app, an Electron deskt
   <img src="docs/screenshots/document-editor.png" alt="Document editor" width="49%">
 </p>
 
-*Screenshots show the fictional demo seed.*
+_Screenshots show the fictional demo seed._
 
 ## Table of contents
 
