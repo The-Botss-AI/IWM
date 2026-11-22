@@ -421,7 +421,7 @@ model User {
   name            String
   image           String?
   phone           String?
-  timezone        String      @default("Asia/Karachi")
+  timezone        String      @default("UTC")
   locale          String      @default("en")
   /// Cross-workspace role. Distinct from WorkspaceMembership.role (which is
   /// per-workspace). EMPLOYEE is the default; ADMIN gates the Users admin
@@ -739,7 +739,7 @@ model Organization {
   /// Reporting currency every `baseAmount` on Payment / Expense is converted
   /// into. Contracts and payments keep their own currency; this is purely the
   /// denominator the finance dashboard sums in.
-  baseCurrency    String    @default("PKR")
+  baseCurrency    String    @default("USD")
   /// Invoice branding and defaults (company details, logo, bank details,
   /// payment terms, default template). Validated by `invoiceSettingsSchema`
   /// in @botss/shared-types.
@@ -2965,7 +2965,7 @@ model Expense {
   vendor          String?
   description     String
   amount          Decimal         @db.Decimal(14, 2)
-  currency        String          @default("PKR")
+  currency        String          @default("USD")
   fxRate          Decimal         @default(1) @db.Decimal(18, 8)
   baseAmount      Decimal         @default(0) @db.Decimal(14, 2)
   paymentSourceId String?
@@ -3028,7 +3028,7 @@ model PayrollEmployee {
   dateOfJoining DateTime?            @db.Date
   paymentMethod PayrollPaymentMethod @default(BANK_TRANSFER)
   monthlySalary Decimal              @db.Decimal(14, 2)
-  currency      String               @default("PKR")
+  currency      String               @default("USD")
   designation   String?
   bankName      String?
   accountTitle  String?

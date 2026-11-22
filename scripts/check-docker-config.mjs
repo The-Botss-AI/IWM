@@ -18,7 +18,8 @@
  *      init migration missing or writing rows, the migrations folder ignored
  *      again, or quickstart / db-setup creating migrations instead of
  *      deploying them (and adopting older installs) through
- *      packages/database/scripts/schema-setup.mjs.
+ *      packages/database/scripts/schema-setup.mjs, or a shipped migration
+ *      named like an old install's local one (`*_init`, `*_upgrade`).
  *   7. The public demo settings undocumented, or the demo reset losing its
  *      profile or its safety checks.
  *
@@ -184,6 +185,14 @@ if (!initName) {
       `${migrationsDir}/${e.name} sorts before ${initName}; schema-setup would treat it as an old local migration.`,
     );
   }
+  const legacyNamed = readdirSync(join(ROOT, migrationsDir), { withFileTypes: true }).filter(
+    (e) => e.isDirectory() && e.name !== initName && /_(init|upgrade)$/.test(e.name),
+  );
+  for (const e of legacyNamed) {
+    problems.push(
+      `${migrationsDir}/${e.name} ends in _init or _upgrade; schema-setup would move it aside as an old local migration. Rename it.`,
+    );
+  }
 }
 try {
   read(`${migrationsDir}/migration_lock.toml`);
@@ -198,8 +207,9 @@ for (const needle of [
   'deploy',
   '--from-schema-datasource',
   '--to-schema-datamodel',
-  'resolve',
-  '--applied',
+  '_prisma_migrations',
+  'checksum',
+  'pg_advisory_lock',
 ]) {
   if (!schemaSetup.includes(needle)) {
     problems.push(

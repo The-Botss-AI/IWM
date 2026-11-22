@@ -177,7 +177,7 @@ export const FIELD_CATALOG: readonly FieldCatalogEntry[] = [
       id,
       type: 'currency',
       label: 'Amount',
-      currencies: ['PKR', 'AED', 'TRY', 'USD'],
+      currencies: ['USD', 'EUR', 'GBP', 'AED'],
       defaultCurrency: 'USD',
     }),
   },

@@ -342,7 +342,7 @@ export class OrganizationsService {
             email: firstOwner.email,
             name: ownerName,
             emailVerified: false,
-            timezone: 'Asia/Karachi',
+            timezone: 'UTC',
             locale: 'en',
             organizationId: org.id,
             // The first user of a new org is its tenant admin: they manage
@@ -815,7 +815,7 @@ export class OrganizationsService {
           email,
           name: ownerName,
           emailVerified: false,
-          timezone: 'Asia/Karachi',
+          timezone: 'UTC',
           locale: 'en',
           organizationId: orgId,
           // First owner of the org is its tenant admin (see create()).
@@ -865,7 +865,7 @@ export class OrganizationsService {
           email,
           name: ownerName,
           emailVerified: false,
-          timezone: 'Asia/Karachi',
+          timezone: 'UTC',
           locale: 'en',
           organizationId: orgId,
           // First owner of the org is its tenant admin (see create()).

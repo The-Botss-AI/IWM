@@ -92,7 +92,7 @@ export class PaymentsService {
       where: { id: workspaceId },
       select: { organization: { select: { baseCurrency: true } } },
     });
-    return ws?.organization?.baseCurrency ?? 'PKR';
+    return ws?.organization?.baseCurrency ?? 'USD';
   }
 
   /**

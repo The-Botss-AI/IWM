@@ -209,8 +209,8 @@ export default function FinancialsPage() {
           addOpen={addingPayrollPeople}
           onAddOpenChange={setAddingPayrollPeople}
           // Null while loading (mark-paid waits for it). If the summary
-          // fails, fall back to PKR and let the server ask for a rate.
-          baseCurrency={summary.isError ? 'PKR' : (summary.data?.baseCurrency ?? null)}
+          // fails, fall back to USD (the server's default) and let the server ask for a rate.
+          baseCurrency={summary.isError ? 'USD' : (summary.data?.baseCurrency ?? null)}
         />
       ) : null}
 

@@ -5,6 +5,10 @@ An open-source, self-hostable all-in-one workspace for teams. It covers projects
 IWM is a TypeScript monorepo: a NestJS API, a Next.js web app, an Electron desktop shell and an Expo mobile app, all sharing Zod schemas and a typed API client. See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together.
 
 <p align="center">
+  <img src="docs/screenshots/tour.gif" alt="Short tour: project board, task, chat, calendar and invoice" width="98%">
+</p>
+
+<p align="center">
   <img src="docs/screenshots/project-board.png" alt="Project board with tasks in columns" width="49%">
   <img src="docs/screenshots/chat-channel.png" alt="Chat channel with messages" width="49%">
 </p>
@@ -155,7 +159,7 @@ Both check what the database already has:
   - If it is behind (an older IWM), the missing tables, columns, enum values and indexes are added, but only when every change is purely additive.
   - If bringing it in line would drop, rename, retype or delete anything, setup stops, prints the SQL and changes nothing. Review it and bring the database in line yourself.
   - Indexes the database has and the schema does not (for example SQL-only search indexes from your own migrations) are kept.
-  - Then the shipped migrations are marked as applied (`prisma migrate resolve --applied`). Your old local migration folders and a copy of the old `_prisma_migrations` rows move to `packages/database/prisma/migrations-backup/<time>/` (gitignored). Nothing is deleted from your data.
+  - Then the shipped migrations are recorded as applied in `_prisma_migrations`, in one transaction, with the same checksums Prisma writes. Setup holds a Postgres advisory lock, so two runs at once wait for each other. Your old local migration folders and a copy of the old `_prisma_migrations` rows move to `packages/database/prisma/migrations-backup/<time>/` (gitignored). Nothing is deleted from your data.
 
 For a production database, take a backup first and run the same step against it, or by hand: `pnpm --filter @botss/database exec prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --script` to see the difference, then `prisma migrate resolve --applied <name>` for each folder in `packages/database/prisma/migrations` once it matches. Then restart the API and worker.
 

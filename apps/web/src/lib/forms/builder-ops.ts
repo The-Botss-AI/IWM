@@ -390,7 +390,7 @@ export const CANVAS_END_ID = 'canvas-end';
 
 // ─── Misc ───────────────────────────────────────────────────────────────────
 
-export const CURRENCY_PRESETS = ['PKR', 'AED', 'TRY', 'USD', 'EUR', 'GBP', 'SAR'] as const;
+export const CURRENCY_PRESETS = ['USD', 'EUR', 'GBP', 'AED', 'PKR', 'TRY', 'SAR'] as const;
 
 /** Sentence for the first problem in a failed schema parse, naming the field. */
 export function describeSchemaProblem(
