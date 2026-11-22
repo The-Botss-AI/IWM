@@ -18,6 +18,7 @@ try {
 // apps/api/.env or the runtime environment if that path doesn't exist. Done before
 // any other imports that read process.env (Better Auth secret, etc.).
 import { config as loadDotenv } from 'dotenv';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -57,6 +58,12 @@ if (appDir !== rootDir) {
   if (existsSync(appEnvLocal)) loadDotenv({ path: appEnvLocal, override: true });
 }
 
+// Sentry must initialise before express/Nest load so it can instrument them.
+// No-op unless SENTRY_DSN is set.
+import { initSentry } from './observability/sentry';
+
+initSentry();
+
 import { Logger, type LogLevel } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ExpressAdapter, type NestExpressApplication } from '@nestjs/platform-express';
@@ -73,6 +80,8 @@ import { setAuthInstance } from './auth/auth.service';
 import { PreflightError, runPreflight } from './common/preflight';
 import { reportSignInFailure } from './security-alerts/sign-in-failure-sink';
 import { isAllowedBetterAuthRoute } from './auth/better-auth-routes';
+import { isDemoMode } from './common/demo-mode';
+import { platformEnvWarnings } from './common/platform-env';
 import { getSharedMailSender } from './email/email.module';
 import { bootstrapWorker } from './worker-bootstrap';
 
@@ -182,6 +191,8 @@ async function bootstrap(): Promise<void> {
     return;
   }
 
+  for (const warning of platformEnvWarnings()) logger.warn(warning);
+
   const expressApp = express();
   // The API sits behind exactly one reverse proxy (Caddy). Without this,
   // `req.ip` is 127.0.0.1 for every request, so every IP-keyed rate limiter
@@ -274,14 +285,19 @@ async function bootstrap(): Promise<void> {
   // per 15 min per IP. The limiter is in-memory; each API process keeps its
   // own bucket, which is fine for a single server. To scale out
   // horizontally, swap for `rate-limit-redis`.
+  // A public demo (DEMO_MODE=true) halves it: the demo login is printed on
+  // the sign in page, so nobody needs more attempts than that.
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 10,
+    max: isDemoMode() ? 5 : 10,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
     message: { title: 'Too many auth attempts. Try again later.', status: 429 },
     // Pre-flight CORS requests should not count toward the bucket.
     skip: (req) => req.method === 'OPTIONS',
+    // Only failed attempts count, so visitors sharing a login (the demo)
+    // are not locked out by each other's successful sign-ins.
+    skipSuccessfulRequests: true,
   });
   expressApp.use('/api/auth/sign-in', authLimiter);
   expressApp.use('/api/auth/sign-up', authLimiter);
@@ -355,8 +371,67 @@ async function bootstrap(): Promise<void> {
   });
   expressApp.use(`/${apiPrefix}/forms/public`, publicContentLimiter);
   expressApp.use(`/${apiPrefix}/public/documents`, publicContentLimiter);
+  // Form builder public links (lookup, upload tickets, submits) get their own
+  // bucket: a form with several file questions makes a request per file, and
+  // must not eat into the document and signing limits above. The form service
+  // adds per-form Redis caps on top.
+  const publicFormsLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 60,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { title: 'Too many requests. Try again later.', status: 429 },
+    skip: (req) => req.method === 'OPTIONS',
+  });
+  expressApp.use(`/${apiPrefix}/public/forms`, publicFormsLimiter);
   // Signing links: session lookups, PDF fetches, sign and decline.
   expressApp.use(`/${apiPrefix}/public/signatures`, publicContentLimiter);
+
+  // Meetings, login-free: RSVP links in guest emails and the private calendar
+  // feed (calendar apps poll it). The token is the credential (256-bit,
+  // hashed at rest); these cap probing and polling per IP. The .ics import is
+  // authenticated but parses up to 2 MB per request, so it gets its own bound.
+  const meetingRsvpLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { title: 'Too many requests. Try again later.', status: 429 },
+    skip: (req) => req.method === 'OPTIONS',
+  });
+  expressApp.use(`/${apiPrefix}/public/meetings`, meetingRsvpLimiter);
+  // The feed is polled by calendar services (Google, Apple, Outlook) that
+  // fetch every subscriber's feed from a few shared IPs, so a tight per-IP
+  // cap would starve everyone behind them. Each feed gets its own bucket
+  // (keyed by a hash of its path, so the token itself is not kept), and the
+  // per-IP cap is only an outer bound against token probing.
+  const meetingFeedLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 20,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { title: 'Too many requests. Try again later.', status: 429 },
+    skip: (req) => req.method === 'OPTIONS',
+    keyGenerator: (req) => `feed:${createHash('sha256').update(req.path).digest('hex')}`,
+  });
+  const meetingFeedIpLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 600,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { title: 'Too many requests. Try again later.', status: 429 },
+    skip: (req) => req.method === 'OPTIONS',
+  });
+  expressApp.use(`/${apiPrefix}/meetings/feed`, meetingFeedIpLimiter, meetingFeedLimiter);
+  const meetingImportLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 30,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { title: 'Too many imports. Try again later.', status: 429 },
+    skip: (req) => req.method !== 'POST',
+  });
+  expressApp.use(`/${apiPrefix}/meetings/import`, meetingImportLimiter);
 
   // Client portal: authenticated, but used by people outside the company, so
   // it gets an outer bound of its own. Looser than the public routes because
@@ -384,6 +459,23 @@ async function bootstrap(): Promise<void> {
     skip: (req) => req.method !== 'POST',
   });
   expressApp.use(`/${apiPrefix}/chat/requests`, chatRequestLimiter);
+
+  // Public demo: an outer bound on writes per IP, so one visitor cannot flood
+  // the shared data between nightly resets. Reads stay unlimited here.
+  if (isDemoMode()) {
+    const demoWriteLimiter = rateLimit({
+      windowMs: 60 * 1000,
+      max: 60,
+      standardHeaders: 'draft-7',
+      legacyHeaders: false,
+      message: { title: 'Too many changes in a short time. Try again in a minute.', status: 429 },
+      skip: (req) => ['GET', 'HEAD', 'OPTIONS'].includes(req.method),
+    });
+    expressApp.use(`/${apiPrefix}`, demoWriteLimiter);
+    logger.warn(
+      'DEMO_MODE is on: outgoing mail, push and cPanel calls are skipped and some actions are refused. Never use it on a real install.',
+    );
+  }
 
   // Only the Better Auth endpoints the apps actually call are reachable; see
   // `auth/better-auth-routes.ts` for why the rest (update-user above all) are
@@ -416,9 +508,13 @@ async function bootstrap(): Promise<void> {
   // (the signing schema caps it at 420,000 characters). Registered before
   // init, so Nest skips its default JSON parser; the rawBody option still
   // applies, which the lead intake's HMAC check relies on.
+  // Anonymous form endpoints get a tighter JSON limit, parsed first so the
+  // 1 MB parser below skips them. A form answer never needs more: long text
+  // is capped at 10,000 characters and rich text at 50 KB of JSON.
+  expressApp.use(`/${apiPrefix}/public/forms`, express.json({ limit: '256kb' }));
   app.useBodyParser('json', { limit: '1mb' });
 
-  // Socket.IO adapter for the chat gateway (Phase 3). Must be registered
+  // Socket.IO adapter for the chat gateway. Must be registered
   // before listen() so gateway lifecycle hooks bind to the underlying HTTP
   // server. The global /api/v1 prefix above does NOT apply to socket.io
   // namespaces - clients connect to ws://host:4000/chat.

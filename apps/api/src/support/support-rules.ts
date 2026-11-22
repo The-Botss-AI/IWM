@@ -17,14 +17,28 @@ const SECRET_PARAM_NAMES = new Set(['token', 'code', 'slug', 'secret', 'key']);
 /**
  * Path segments followed by a secret, for routes whose params aren't known
  * (the guard runs before some routers fill `req.params`). Matched case
- * insensitively, like Express routes.
+ * insensitively, like Express routes. A secret ends at the next `/`,
+ * whitespace, query, fragment or quote, so the same patterns also work on
+ * free text that contains a path (error messages, see `redactSecretPaths`).
  */
 const SECRET_SEGMENT_PATTERNS: ReadonlyArray<[RegExp, string]> = [
-  [/(\/invites\/)[^/]+/gi, '$1:code'],
-  [/(\/public\/signatures\/)[^/]+/gi, '$1:token'],
-  [/(\/public\/documents\/)[^/]+/gi, '$1:slug'],
-  [/(\/forms\/public\/)[^/]+/gi, '$1:slug'],
+  [/(\/invites\/)[^/\s?#"'<>]+/gi, '$1:code'],
+  [/(\/public\/signatures\/)[^/\s?#"'<>]+/gi, '$1:token'],
+  [/(\/public\/documents\/)[^/\s?#"'<>]+/gi, '$1:slug'],
+  [/(\/forms\/public\/)[^/\s?#"'<>]+/gi, '$1:slug'],
+  [/(\/public\/meetings\/rsvp\/)[^/\s?#"'<>]+/gi, '$1:token'],
+  // Also the web's RSVP page, linked from guest emails.
+  [/(\/meetings\/rsvp\/)[^/\s?#"'<>]+/gi, '$1:token'],
+  [/(\/meetings\/feed\/)[^/\s?#"'<>]+/gi, '$1:token'],
 ];
+
+/** Replace every secret path segment in a path or a piece of text by its name. */
+export function redactSecretPaths(text: string): string {
+  let out = text;
+  for (const [pattern, replacement] of SECRET_SEGMENT_PATTERNS)
+    out = out.replace(pattern, replacement);
+  return out;
+}
 
 /**
  * The path recorded for a support request: no query string (search terms,
@@ -50,9 +64,7 @@ export function supportAccessPath(
         .join('/');
     }
   }
-  for (const [pattern, replacement] of SECRET_SEGMENT_PATTERNS) {
-    path = path.replace(pattern, replacement);
-  }
+  path = redactSecretPaths(path);
   return path.length > 300 ? path.slice(0, 300) : path;
 }
 
@@ -68,6 +80,8 @@ export const SUPPORT_EXCLUDED_PREFIXES: readonly string[] = [
   '/livekit',
   '/todos',
   '/org/mail-config',
+  // Meetings are private to their organizer and attendees.
+  '/meetings',
 ];
 
 /** Search kinds a support session never searches (chat and mail). */

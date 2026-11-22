@@ -32,6 +32,41 @@ export async function ensureAndroidChannels(): Promise<void> {
     sound: 'default',
     vibrationPattern: [0, 500, 500, 500],
   });
+  // Meeting reminders ring like a call, at max importance and visible on the
+  // lock screen. Android does not let an app bypass Do Not Disturb without the
+  // user's own policy access, so importance is the strongest we can set.
+  await Notifications.setNotificationChannelAsync('meeting-reminders', {
+    name: 'Meeting reminders',
+    importance: Notifications.AndroidImportance.MAX,
+    sound: 'default',
+    vibrationPattern: [0, 500, 250, 500],
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+  });
+  // Calls for Do Not Disturb users: shown, but no sound and no vibration.
+  await Notifications.setNotificationChannelAsync('calls-silent', {
+    name: 'Calls (silent)',
+    importance: Notifications.AndroidImportance.DEFAULT,
+    sound: null,
+    vibrationPattern: [0],
+    enableVibrate: false,
+  });
+}
+
+/** Answer and Decline buttons for silent call notifications (server sends
+ *  categoryId 'call'). Answer opens the app on the call; Decline opens
+ *  the app without navigating and declines the call over the web app's socket. */
+export async function ensureNotificationCategories(): Promise<void> {
+  await Notifications.setNotificationCategoryAsync('call', [
+    { identifier: 'answer', buttonTitle: 'Answer', options: { opensAppToForeground: true } },
+    { identifier: 'decline', buttonTitle: 'Decline', options: { opensAppToForeground: true } },
+  ]).catch(() => undefined);
+  // Meeting reminders (server sends categoryId 'meeting-reminder'). Join opens
+  // the app; Snooze also brings it forward (the handler cannot run reliably
+  // in the background) and reaches the web app as `botss:meeting-snooze`.
+  await Notifications.setNotificationCategoryAsync('meeting-reminder', [
+    { identifier: 'join', buttonTitle: 'Join', options: { opensAppToForeground: true } },
+    { identifier: 'snooze', buttonTitle: 'Snooze 5 min', options: { opensAppToForeground: true } },
+  ]).catch(() => undefined);
 }
 
 /**

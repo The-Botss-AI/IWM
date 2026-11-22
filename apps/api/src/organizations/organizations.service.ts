@@ -27,6 +27,7 @@ import type {
 import { Prisma } from '@botss/database';
 
 import { assertEmailDomainAllowed } from '../common/email-domain';
+import { claimingOrgIdFor } from './domain-claims';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { assertNotClientAccount } from '../common/client-accounts';
 import { decrypt, encrypt } from '../common/crypto/aes-gcm.util';
@@ -35,7 +36,7 @@ import { RealtimeEventsService } from '../notifications/realtime-events.service'
 import { PrismaService } from '../prisma/prisma.service';
 import { issueWorkspaceInvitation } from '../invitations/invitation-tokens';
 import { withoutDeleteCounting } from '../security-alerts/delete-counting';
-import { ROOT_ORG_ID, ROOT_ORG_SLUG } from './organizations.constants';
+import { ROOT_ORG_ID } from './organizations.constants';
 import { userHasCompanyPermission } from '../common/permissions/effective-permissions';
 
 interface DecryptedMailConfig {
@@ -54,9 +55,8 @@ interface DecryptedMailConfig {
 
 /**
  * Tenant organization management. Every mutation funnels through
- * `assertNotRoot` before touching the DB; the root row is also
- * protected by a Postgres trigger as a final safety net (see the
- * migration `20260522090000_organization_layer`).
+ * `assertNotRoot` before touching the DB, which keeps the root row
+ * immutable.
  */
 @Injectable()
 export class OrganizationsService {
@@ -70,8 +70,8 @@ export class OrganizationsService {
     @Optional() private readonly realtime?: RealtimeEventsService,
   ) {}
 
-  /** App-layer half of the root-protection contract. The trigger handles
-   *  any path that goes around this method. */
+  /** Root-organization protection: every mutation path calls this before
+   *  touching the DB. */
   private assertNotRoot(orgId: string): void {
     if (orgId === ROOT_ORG_ID) {
       throw new ForbiddenException({
@@ -242,7 +242,11 @@ export class OrganizationsService {
     input: CreateOrganizationInput & { mailConfig?: PublicSignupMailConfigInput },
     actorUserId?: string,
   ): Promise<CreateOrganizationResponse> {
-    if (input.slug === ROOT_ORG_SLUG || input.slug === ROOT_ORG_ID) {
+    const rootSlug = await this.prisma.raw.organization.findFirst({
+      where: { isRoot: true },
+      select: { slug: true },
+    });
+    if (input.slug === ROOT_ORG_ID || input.slug === rootSlug?.slug) {
       throw new ConflictException({
         title: 'Reserved slug',
         status: 409,
@@ -260,7 +264,7 @@ export class OrganizationsService {
     // Catch admin typos before we touch the DB: if the tenant declared an
     // email domain, the bootstrap owner's address must live inside it.
     // Otherwise the user's auto-route lookup at first login would skip this
-    // org and they'd land in the root tenant alongside The Botss staff,
+    // org and they'd land in the root tenant alongside the platform staff,
     // which is the exact failure mode this whole flow is supposed to prevent.
     if (firstOwner && input.emailDomain) {
       const ownerDomain = firstOwner.email.split('@')[1]?.toLowerCase();
@@ -452,13 +456,7 @@ export class OrganizationsService {
       orgId: null,
       actorOrgIsRoot: false,
       email: input.email,
-      claimingOrgId: async (domain) => {
-        const claim = await this.prisma.client.organization.findFirst({
-          where: { emailDomain: domain, deletedAt: null },
-          select: { id: true },
-        });
-        return claim?.id ?? null;
-      },
+      claimingOrgId: (domain) => claimingOrgIdFor(this.prisma, domain),
     });
     const slug = await this.allocateOrgSlug(input.organizationName);
     const created = await this.create({
@@ -480,7 +478,7 @@ export class OrganizationsService {
   /**
    * Resolve the org a tenant admin is allowed to manage, asserting they are an
    * organization admin first. `systemRole` ADMIN is the tenant-admin tier
-   * (the org's first owner is provisioned as ADMIN); SUPER_ADMIN is the Botss
+   * (the org's first owner is provisioned as ADMIN); SUPER_ADMIN is the
    * platform admin. Either way they may only ever touch their OWN org - the
    * id comes from their user row, never from the request - so this can't be
    * used to reach another tenant's mail config.
@@ -536,7 +534,8 @@ export class OrganizationsService {
     const base = slugified.length >= 2 ? slugified : 'org';
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const candidate = attempt === 0 ? base : `${base}-${randomBytes(2).toString('hex')}`;
-      if (candidate === ROOT_ORG_SLUG || candidate === ROOT_ORG_ID) continue;
+      // The root organization's own slug clashes below like any other.
+      if (candidate === ROOT_ORG_ID) continue;
       const clash = await this.prisma.raw.organization.findUnique({
         where: { slug: candidate },
         select: { id: true },

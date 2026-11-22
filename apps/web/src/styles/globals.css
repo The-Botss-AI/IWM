@@ -369,6 +369,13 @@
     animation: progress-slide 1.4s ease-in-out infinite;
   }
 
+  /* The loader ring's spin. Defined here, not only in tailwind.config, because
+   * Tailwind emits config keyframes only when an `animate-*` class uses them,
+   * and `.spinner-gradient` references this one directly. */
+  @keyframes gradient-spin {
+    to { transform: rotate(360deg); }
+  }
+
   /* Pulse hint for "Loading…" text under the spinner so even on a fast
    * page the user knows something is loading. Slower than the default
    * `animate-pulse` so the text doesn't strobe. */
@@ -508,10 +515,10 @@
     height: 24px;
     border-radius: 9999px;
     background:
-      conic-gradient(from 0deg, #7b6fe8, #e040fb, #f4845f, #7b6fe8);
+      conic-gradient(from 0deg, rgba(123, 111, 232, 0), #7b6fe8 25%, #e040fb 65%, #f4845f);
     -webkit-mask: radial-gradient(circle at center, transparent 35%, black 38%);
     mask: radial-gradient(circle at center, transparent 35%, black 38%);
-    animation: gradient-spin 0.8s linear infinite;
+    animation: gradient-spin var(--spin-duration, 0.8s) linear infinite;
   }
 
   /* Full-page loading dim - drop into a Suspense fallback or Next.js

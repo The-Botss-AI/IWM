@@ -2,6 +2,7 @@ import { Controller, Get, Query, Res } from '@nestjs/common';
 import { type ExportTimesheetQuery, exportTimesheetQuerySchema } from '@botss/shared-types';
 import type { Response } from 'express';
 
+import { RequireAddon } from '../addons/require-addon.decorator';
 import { CurrentUser, type AuthedUser } from '../common/decorators/current-user.decorator';
 import { SkipPermissions } from '../common/decorators/skip-permissions.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
@@ -12,6 +13,7 @@ import { AttendanceExportService } from './attendance-export.service';
  * The service guards on (caller == target || isAdminOrHR) so the
  * "admin" path label is descriptive, not load-bearing.
  */
+@RequireAddon('hr')
 @Controller('admin/timesheets')
 export class AttendanceExportController {
   constructor(private readonly exporter: AttendanceExportService) {}

@@ -30,6 +30,12 @@ interface CreateNotificationArgs {
    *  caller already delivered an OS banner through another path - e.g. chat,
    *  which fans out its own push for every message. */
   skipPush?: boolean;
+  /** Extra structured `data` for the OS push (merged after the ids). A
+   *  meeting reminder sets `type: 'meeting-reminder'` here, which is what
+   *  makes it ring through Do Not Disturb (NotificationsPushService). */
+  pushData?: Record<string, unknown>;
+  /** Keep the browser banner up until the user acts on it. */
+  requireInteraction?: boolean;
 }
 
 /**
@@ -163,7 +169,9 @@ export class NotificationsService {
           notificationId: row.id,
           ...(args.entityType ? { entityType: args.entityType } : {}),
           ...(args.entityId ? { entityId: args.entityId } : {}),
+          ...(args.pushData ?? {}),
         },
+        ...(args.requireInteraction ? { requireInteraction: true } : {}),
       })
       .catch((err) => {
         this.logger.warn(

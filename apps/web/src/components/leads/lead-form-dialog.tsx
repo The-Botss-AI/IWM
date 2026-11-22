@@ -1,5 +1,6 @@
 'use client';
 
+import type { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Controller, useForm } from 'react-hook-form';
 import {
@@ -68,7 +69,7 @@ export function LeadFormDialog({
     control,
     reset,
     formState: { errors, isSubmitting },
-  } = useForm<CreateLeadInput>({
+  } = useForm<z.input<typeof createLeadSchema>, unknown, CreateLeadInput>({
     resolver: zodResolver(createLeadSchema),
     defaultValues: DEFAULT_VALUES,
   });

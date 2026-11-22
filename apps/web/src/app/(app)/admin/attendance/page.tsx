@@ -14,6 +14,8 @@ import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import type { AttendanceStatus, Holiday } from '@botss/shared-types';
 
+import { AddonOffNotice } from '@/components/addons/addon-off-notice';
+import { useAddons } from '@/hooks/use-addons';
 import { Button } from '@/components/ui/button';
 import { ContextMenu, type ContextMenuItem } from '@/components/ui/context-menu';
 import { Label } from '@/components/ui/label';
@@ -42,7 +44,7 @@ import { HolidayDetails } from '@/components/admin/holiday-details';
  * to ADMIN / HR. The page is also wrapped by the `/admin` layout guard
  * so non-privileged users bounce to `/home` before any data fetch.
  */
-export default function AdminAttendancePage() {
+function AdminAttendancePageContent() {
   const [monthCursor, setMonthCursor] = useState<Date>(() => startOfMonth(new Date()));
   const range = useMemo(() => {
     const from = startOfMonth(monthCursor);
@@ -608,4 +610,11 @@ function HolidaysPanel({ range }: { range: { from: Date; to: Date } }) {
       />
     </section>
   );
+}
+
+/** Hidden while the organization has the HR add-on switched off. */
+export default function AdminAttendancePage() {
+  const addons = useAddons();
+  if (!addons.isOn('hr')) return <AddonOffNotice name="HR" />;
+  return <AdminAttendancePageContent />;
 }

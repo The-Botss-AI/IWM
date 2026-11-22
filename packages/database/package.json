@@ -27,7 +27,7 @@
     "dev": "cross-env NODE_OPTIONS=\"--max-old-space-size=4096\" tsc -p tsconfig.build.json --watch --preserveWatchOutput",
     "lint": "echo 'no eslint yet' && exit 0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "echo 'no tests yet' && exit 0",
+    "test": "vitest run",
     "clean": "rimraf dist .turbo *.tsbuildinfo || exit 0",
     "postinstall": "prisma generate"
   },
@@ -41,6 +41,7 @@
     "cross-env": "^7.0.3",
     "prisma": "^5.22.0",
     "rimraf": "^6.0.1",
-    "tsx": "^4.23.15"
+    "tsx": "^4.23.15",
+    "vitest": "4.1.12"
   }
 }

@@ -14,9 +14,8 @@ import { bumpFinanceSummary } from './finance-summary-cache';
 import { money, toDecimal } from './serialize';
 
 /**
- * The rails The Botss actually gets paid through. Mirrors the SQL seed in
- * `20260828122000_seed_payment_sources` so an org created AFTER that migration
- * still starts with a usable list instead of an empty picker.
+ * Default payment rails (platforms, banks, wallets) every organization starts
+ * with, created on first use so the picker is never empty.
  */
 const DEFAULT_SOURCES: ReadonlyArray<{
   name: string;

@@ -254,7 +254,7 @@ const MAX_SIGNATURE_DATA_URL = 420_000;
 export const signPublicSchema = z
   .object({
     consent: z.literal(true, {
-      errorMap: () => ({ message: 'Please agree to sign electronically.' }),
+      error: 'Please agree to sign electronically.',
     }),
     method: SignatureMethod,
     /** The signature as a PNG. Typed signatures are rendered to PNG by the

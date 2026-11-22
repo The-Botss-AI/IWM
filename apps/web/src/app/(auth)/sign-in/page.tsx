@@ -1,5 +1,6 @@
 'use client';
 
+import type { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -9,8 +10,15 @@ import { signInSchema, type SignInInput } from '@botss/shared-types';
 
 import { PasswordInput } from '@/components/ui/password-input';
 import { authClient } from '@/lib/auth-client';
+import { env } from '@/lib/env';
 import { landingPathAfterSignIn } from '@/lib/session-query';
 import { describeError } from '@/lib/toast';
+
+/** The shared login of a public live demo, or null on a normal install. */
+const DEMO_LOGIN =
+  env.demoMode && env.demoLoginEmail && env.demoLoginPassword
+    ? { email: env.demoLoginEmail, password: env.demoLoginPassword }
+    : null;
 
 export default function SignInPage() {
   return (
@@ -29,9 +37,12 @@ function SignInForm() {
     handleSubmit,
     setValue,
     formState: { errors, isSubmitting },
-  } = useForm<SignInInput>({
+  } = useForm<z.input<typeof signInSchema>, unknown, SignInInput>({
     resolver: zodResolver(signInSchema),
-    defaultValues: { rememberMe: true },
+    // A public demo prefills its shared login; it is printed below too.
+    defaultValues: DEMO_LOGIN
+      ? { email: DEMO_LOGIN.email, password: DEMO_LOGIN.password, rememberMe: true }
+      : { rememberMe: true },
   });
 
   // Recovery path: if the page reloaded because the user submitted while JS
@@ -44,7 +55,12 @@ function SignInForm() {
     if (email || password) {
       if (email) setValue('email', email);
       if (password) setValue('password', password);
-      window.history.replaceState(null, '', '/sign-in');
+      // Drop only the credentials; keep `next` and anything else.
+      const params = new URLSearchParams(window.location.search);
+      params.delete('email');
+      params.delete('password');
+      const query = params.toString();
+      window.history.replaceState(null, '', query ? `/sign-in?${query}` : '/sign-in');
     }
   }, [searchParams, setValue]);
 
@@ -73,7 +89,7 @@ function SignInForm() {
         return;
       }
 
-      window.location.replace(await landingPathAfterSignIn());
+      window.location.replace(await landingPathAfterSignIn(searchParams.get('next')));
     } catch (err) {
       // Inline under the form (the established sign-in UX). Network failures
       // read as "Couldn't reach the server..." instead of a generic message.
@@ -89,6 +105,17 @@ function SignInForm() {
         </h1>
         <p className="text-ink-muted mt-1 text-sm">Sign in to your workspace.</p>
       </div>
+
+      {DEMO_LOGIN ? (
+        <div className="border-line bg-bg-subtle rounded-md border px-3 py-2 text-sm">
+          <p className="font-medium">Live demo</p>
+          <p className="text-ink-muted mt-0.5">
+            Sign in with <span className="text-ink font-medium">{DEMO_LOGIN.email}</span> and
+            password <span className="text-ink font-medium">{DEMO_LOGIN.password}</span>. The form
+            is already filled in. Data resets every day.
+          </p>
+        </div>
+      ) : null}
 
       <div className="space-y-1.5">
         <label className="label" htmlFor="email">
@@ -148,15 +175,18 @@ function SignInForm() {
         Admin-managed accounts only. Ask your administrator if you need a password reset.
       </div>
 
-      <div className="border-line text-ink-muted border-t pt-4 text-center text-sm">
-        Are you an organization?{' '}
-        <Link
-          href="/org-signup"
-          className="text-brand-600 hover:text-brand-700 font-medium hover:underline"
-        >
-          Sign up now
-        </Link>
-      </div>
+      {/* Organization signup is turned off in the live demo. */}
+      {env.demoMode ? null : (
+        <div className="border-line text-ink-muted border-t pt-4 text-center text-sm">
+          Are you an organization?{' '}
+          <Link
+            href="/org-signup"
+            className="text-brand-600 hover:text-brand-700 font-medium hover:underline"
+          >
+            Sign up now
+          </Link>
+        </div>
+      )}
     </form>
   );
 }

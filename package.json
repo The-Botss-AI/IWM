@@ -23,6 +23,9 @@
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yaml,yml}\"",
     "db:generate": "pnpm --filter @botss/database run generate",
     "db:migrate": "dotenv -e .env -- pnpm --filter @botss/database run migrate",
+    "db:migrate:deploy": "dotenv -e .env -- pnpm --filter @botss/database exec prisma migrate deploy",
+    "db:migrate:status": "dotenv -e .env -- pnpm --filter @botss/database exec prisma migrate status",
+    "demo:reset": "dotenv -e .env -- pnpm --filter @botss/api exec tsx src/scripts/demo-reset.ts",
     "db:studio": "dotenv -e .env -- pnpm --filter @botss/database run studio",
     "db:seed:dev": "cross-env NODE_ENV=development ALLOW_SEED=true dotenv -e .env -- pnpm --filter @botss/database run seed",
     "db:push": "dotenv -e .env -- pnpm --filter @botss/database run push",
@@ -41,13 +44,14 @@
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
-    "better-auth": "1.6.33",
-    "zod": "3.24.1"
+    "better-auth": "1.7.16",
+    "zod": "4.6.7"
   },
   "pnpm": {
     "overrides": {
       "zod@<4": "3.24.1",
-      "better-auth": "1.6.33",
+      "better-auth": "1.7.16",
+      "fast-xml-parser": "^5.12.0",
       "multer": "^2.5.0",
       "ws@>=8.0.0": "^8.21.0",
       "socket.io-parser": "^4.2.7",

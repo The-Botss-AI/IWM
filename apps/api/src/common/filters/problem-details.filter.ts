@@ -10,6 +10,7 @@ import { Prisma } from '@botss/database';
 import type { Request, Response } from 'express';
 
 import { MailHostRefusedError } from '../../mail/mail-ssrf';
+import { captureServerError } from '../../observability/sentry';
 import { humanizeField } from '../humanize-field';
 
 interface ProblemBody {
@@ -46,6 +47,12 @@ export class ProblemDetailsExceptionFilter implements ExceptionFilter {
     if (body.status >= 500) {
       const stack = exception instanceof Error ? exception.stack : String(exception);
       this.logger.error(`${body.status} ${req.method} ${path}\n${stack}`);
+      const rid = req.headers?.['x-request-id'];
+      captureServerError(exception, {
+        status: body.status,
+        method: req.method,
+        requestId: typeof rid === 'string' ? rid.slice(0, 64) : undefined,
+      });
     }
   }
 

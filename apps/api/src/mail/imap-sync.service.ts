@@ -112,10 +112,11 @@ const FLAG_RECONCILE_INTERVAL_MS = intFromEnv('MAIL_FLAG_RECONCILE_INTERVAL_MS',
 const LOCAL_FLAG_GRACE_MS = 60_000;
 
 /**
- * IMAP sync. Connects per-call using the account's decrypted password,
- * snapshots the folder list, then fetches recent messages into the database.
- * No long-lived connection pool yet - each sync opens a fresh imapflow
- * session and tears it down. IDLE / persistent connections land in Phase 3.
+ * IMAP sync. Connects with the account's decrypted password, snapshots the
+ * folder list, then fetches recent messages into the database. Connections
+ * come from a small per-account pool (closed after POOL_IDLE_TIMEOUT_MS
+ * unused); the IDLE watcher (imap-idle.service.ts) pins an account's
+ * connection open for real-time delivery.
  */
 @Injectable()
 export class ImapSyncService implements OnModuleDestroy {

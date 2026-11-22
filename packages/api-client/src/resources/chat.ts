@@ -19,6 +19,8 @@ import {
   chatContactsResponseSchema,
   type ChatRoomInvite,
   chatRoomInviteSchema,
+  type IncomingCallResponse,
+  incomingCallResponseSchema,
   type ChatRoomListResponse,
   chatRoomListResponseSchema,
   type ChatRoomMessage,
@@ -161,6 +163,10 @@ export class ChatResource {
 
   adminDeleteRoom(roomId: string) {
     return this.http.delete(`/chat/admin/rooms/${roomId}`, z.object({ ok: z.literal(true) }));
+  }
+
+  getIncomingCall(callId: string): Promise<IncomingCallResponse> {
+    return this.http.get(`/chat/calls/${callId}/incoming`, incomingCallResponseSchema);
   }
 
   initiateCall(roomId: string) {

@@ -1,0 +1,2 @@
+# Prisma checksums each migration file: keep the bytes identical on every OS.
+packages/database/prisma/migrations/** text eol=lf

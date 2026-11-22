@@ -13,6 +13,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback } from 'react';
 
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useAddons } from '@/hooks/use-addons';
 
 /**
  * Sub-tabs are query-driven (`?tab=`) rather than routed, matching
@@ -86,10 +87,12 @@ export function FinancialsTabs({
   tab: FinanceTab;
   onChange: (next: FinanceTab) => void;
 }) {
+  // Payroll belongs to the HR add-on: hidden while it is switched off.
+  const hrOn = useAddons().isOn('hr');
   return (
     <Tabs value={tab} onValueChange={(v) => onChange(v as FinanceTab)}>
       <TabsList className="overflow-x-auto">
-        {FINANCE_TABS.map((t) => {
+        {FINANCE_TABS.filter((t) => t !== 'payroll' || hrOn).map((t) => {
           const Icon = ICONS[t];
           return (
             <TabsTrigger key={t} value={t} className="shrink-0">

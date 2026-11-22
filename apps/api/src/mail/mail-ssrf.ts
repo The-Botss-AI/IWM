@@ -13,45 +13,138 @@ import { isIP } from 'node:net';
  * for the library's own lookup a moment later.
  *
  * Refuses loopback / private / link-local / CGNAT / IMDS (169.254.169.254) /
- * benchmark / reserved / multicast ranges, plus IPv6 prefixes that embed an
- * IPv4 address (NAT64, 6to4). IPv4-mapped IPv6 and numeric-encoded IPv4
- * literals are normalised so they can't slip past as `::ffff:127.0.0.1` or
- * `2130706433`.
+ * benchmark / reserved / multicast ranges. IPv6 literals are parsed into
+ * their eight 16-bit groups first, so every spelling of an address
+ * (`::1`, `0:0:0:0:0:0:0:1`, `0000:...:0001`, `::ffff:7f00:1`,
+ * `0:0:0:0:0:ffff:127.0.0.1`, `::127.0.0.1`) is classified the same way.
+ * IPv4-mapped, -translated and -compatible IPv6 addresses are judged by the
+ * IPv4 address they carry; NAT64, 6to4 and Teredo (which embed an IPv4
+ * address) are refused outright, as is anything outside global unicast
+ * 2000::/3 (unique-local, link-local, site-local, multicast, reserved).
  */
 export function isPrivateIp(ip: string): boolean {
   let v = ip.trim().toLowerCase();
   // Strip IPv6 brackets and any zone id.
   v = (v.replace(/^\[/, '').replace(/\]$/, '').split('%')[0] ?? v).trim();
 
-  // IPv4-mapped / -compatible IPv6, e.g. ::ffff:127.0.0.1 or ::ffff:7f00:1.
-  const mapped = v.match(/^::ffff:(.+)$/i);
-  if (mapped) {
-    const inner = mapped[1]!;
-    if (isIP(inner) === 4) return isPrivateIp(inner);
-    const hex = inner.replace(/:/g, '');
-    if (/^[0-9a-f]{8}$/.test(hex)) {
-      const quad = [0, 2, 4, 6].map((i) => parseInt(hex.slice(i, i + 2), 16)).join('.');
-      return isPrivateIp(quad);
-    }
+  const family = isIP(v);
+  if (family === 4) return isPrivateIpv4(parseIpv4(v)!);
+  if (family === 6) {
+    const groups = parseIpv6(v);
+    // isIP accepted it, so this cannot fail; refuse rather than guess if it does.
+    return groups ? isPrivateIpv6(groups) : true;
   }
+  return isPrivateLegacyString(v);
+}
 
-  // IPv6 prefixes that carry an embedded IPv4 address: NAT64 (64:ff9b::/96)
-  // and 6to4 (2002::/16). Treated as private outright rather than decoded;
-  // no legitimate mail host is published that way.
+/** Dotted-quad IPv4 to four octets, or null. Expects an `isIP() === 4` string. */
+function parseIpv4(v: string): [number, number, number, number] | null {
+  const parts = v.split('.');
+  if (parts.length !== 4) return null;
+  const octets = parts.map((p) => (/^\d{1,3}$/.test(p) ? Number(p) : NaN));
+  if (octets.some((o) => !Number.isInteger(o) || o > 255)) return null;
+  return octets as [number, number, number, number];
+}
+
+function isPrivateIpv4([a, b, c]: [number, number, number, number]): boolean {
+  if (a === 0 || a === 10 || a === 127) return true; // this-network, private, loopback
+  if (a === 169 && b === 254) return true; // link-local, IMDS
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64.0.0/10
+  if (a === 192 && b === 0 && c === 0) return true; // IETF protocol assignments
+  if (a === 198 && (b === 18 || b === 19)) return true; // benchmarking 198.18.0.0/15
+  if (a >= 224) return true; // multicast 224/4 and reserved 240/4
+  return false;
+}
+
+/**
+ * Any valid IPv6 text form to its eight 16-bit groups, or null. Handles `::`
+ * compression, leading zeros and a trailing dotted IPv4 part.
+ */
+function parseIpv6(v: string): number[] | null {
+  let text = v;
+  const tail: number[] = [];
+  const lastColon = text.lastIndexOf(':');
+  const last = text.slice(lastColon + 1);
+  if (last.includes('.')) {
+    const quad = parseIpv4(last);
+    if (!quad) return null;
+    tail.push((quad[0] << 8) | quad[1], (quad[2] << 8) | quad[3]);
+    // Keep a trailing ':' when the IPv4 part directly follows '::'.
+    text = text.slice(0, lastColon + 1);
+    if (!text.endsWith('::')) text = text.slice(0, -1);
+  }
+  const halves = text.split('::');
+  if (halves.length > 2) return null;
+  const toGroups = (s: string): number[] | null => {
+    if (s === '') return [];
+    const out: number[] = [];
+    for (const g of s.split(':')) {
+      if (!/^[0-9a-f]{1,4}$/.test(g)) return null;
+      out.push(parseInt(g, 16));
+    }
+    return out;
+  };
+  const head = toGroups(halves[0]!);
+  if (!head) return null;
+  if (halves.length === 1) {
+    const all = [...head, ...tail];
+    return all.length === 8 ? all : null;
+  }
+  const rest = toGroups(halves[1]!);
+  if (!rest) return null;
+  const known = head.length + rest.length + tail.length;
+  if (known > 7) return null;
+  return [...head, ...new Array<number>(8 - known).fill(0), ...rest, ...tail];
+}
+
+function isPrivateIpv6(g: number[]): boolean {
+  const [g0, g1, , , g4, g5, g6, g7] = g as [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  const embedded = (): [number, number, number, number] => [g6 >> 8, g6 & 0xff, g7 >> 8, g7 & 0xff];
+  const zeroTo = (n: number) => g.slice(0, n).every((x) => x === 0);
+
+  // ::ffff:a.b.c.d (mapped) and ::ffff:0:a.b.c.d (translated): judge the IPv4.
+  if (zeroTo(5) && g5 === 0xffff) return isPrivateIpv4(embedded());
+  if (zeroTo(4) && g4 === 0xffff && g5 === 0) return isPrivateIpv4(embedded());
+  // :: (unspecified) and ::1 (loopback).
+  if (zeroTo(7) && (g7 === 0 || g7 === 1)) return true;
+  // ::a.b.c.d (deprecated IPv4-compatible): judge the IPv4.
+  if (zeroTo(6)) return isPrivateIpv4(embedded());
+  // NAT64 64:ff9b::/96 and local-use 64:ff9b:1::/48 embed an IPv4 address.
+  if (g0 === 0x64 && g1 === 0xff9b) return true;
+  // 6to4 2002::/16 and Teredo 2001::/32 embed an IPv4 address.
+  if (g0 === 0x2002) return true;
+  if (g0 === 0x2001 && g1 === 0) return true;
+  // Only global unicast 2000::/3 is public. This refuses unique-local
+  // fc00::/7, link-local fe80::/10, site-local fec0::/10, multicast ff00::/8
+  // and the reserved/unassigned rest.
+  if ((g0 & 0xe000) !== 0x2000) return true;
+  return false;
+}
+
+/**
+ * Pattern checks for strings that are not IP literals. Callers only pass
+ * literals, but the export has always answered for arbitrary strings, so
+ * that answer is kept unchanged.
+ */
+function isPrivateLegacyString(v: string): boolean {
   if (/^64:ff9b:/.test(v) || /^2002:/.test(v)) return true;
-
   if (v === '::1' || v === '::' || v === '0.0.0.0') return true;
   if (v.startsWith('127.') || v.startsWith('10.') || v.startsWith('192.168.')) return true;
   if (v.startsWith('169.254.') || v.startsWith('0.')) return true;
   if (/^172\.(1[6-9]|2\d|3[01])\./.test(v)) return true;
-  // CGNAT 100.64.0.0/10
   if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(v)) return true;
-  // IETF protocol assignments 192.0.0.0/24, benchmarking 198.18.0.0/15
   if (v.startsWith('192.0.0.') || /^198\.1[89]\./.test(v)) return true;
-  // Multicast 224.0.0.0/4 and reserved 240.0.0.0/4 (first octet 224-255)
-  const firstOctet = Number.parseInt(v.split('.')[0] ?? '', 10);
-  if (isIP(v) === 4 && firstOctet >= 224) return true;
-  // IPv6 ULA (fc00::/7) and link-local (fe80::/10)
   if (v.startsWith('fc') || v.startsWith('fd')) return true;
   if (/^fe[89ab]/.test(v)) return true;
   return false;

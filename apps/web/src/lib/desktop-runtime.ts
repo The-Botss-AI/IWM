@@ -16,13 +16,13 @@ interface BotssDesktopBridge {
   notify?: (args: NativeNotification) => Promise<void>;
 }
 
-/** One OS banner. `type: 'call'` makes it sticky in a shell that supports it. */
+/** One OS banner. `type: 'call'` or `'meeting-reminder'` makes it sticky in a shell that supports it. */
 export interface NativeNotification {
   title: string;
   body: string;
   url?: string;
   tag?: string;
-  type?: 'message' | 'call' | 'generic';
+  type?: 'message' | 'call' | 'meeting-reminder' | 'generic';
 }
 
 function electronBridge(): BotssDesktopBridge | null {
@@ -69,7 +69,7 @@ function notifyInPage(args: NativeNotification): boolean {
     const n = new Notification(args.title, {
       body: args.body,
       ...(args.tag ? { tag: args.tag } : {}),
-      requireInteraction: args.type === 'call',
+      requireInteraction: args.type === 'call' || args.type === 'meeting-reminder',
     });
     n.onclick = () => {
       try {

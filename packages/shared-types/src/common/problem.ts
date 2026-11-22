@@ -8,8 +8,14 @@ export const problemDetailsSchema = z.object({
   detail: z.string().optional(),
   instance: z.string().optional(),
   /** Field-level validation errors (extension). Keyed by JSON pointer to the offending field. */
-  errors: z.record(z.array(z.string())).optional(),
+  errors: z.record(z.string(), z.array(z.string())).optional(),
   /** Application-specific machine code (extension). */
   code: z.string().optional(),
 });
 export type ProblemDetails = z.infer<typeof problemDetailsSchema>;
+
+/**
+ * `code` of the 403 the API answers in a public demo (`DEMO_MODE=true`) for
+ * actions that are turned off there. The web app shows its `detail`.
+ */
+export const DEMO_MODE_PROBLEM_CODE = 'demo-mode';

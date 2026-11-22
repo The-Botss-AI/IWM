@@ -195,6 +195,56 @@ async function main(): Promise<void> {
     same(mergeUserPreferences(base, { navigation: { hidden: [] } }).navigation?.hidden, []),
   );
 
+  // ---- Meetings: default reminders -----------------------------------------
+  {
+    const parsed = userPreferencesSchema.safeParse({
+      meetings: { defaultReminders: [30, 10, 10, 1440] },
+    });
+    check(
+      'default reminders are deduplicated and sorted',
+      parsed.success && same(parsed.data.meetings?.defaultReminders, [10, 30, 1440]),
+    );
+    check(
+      'a custom reminder up to 28 days is accepted',
+      userPreferencesSchema.safeParse({ meetings: { defaultReminders: [40320] } }).success,
+    );
+    check(
+      '0 minutes is refused',
+      !userPreferencesSchema.safeParse({ meetings: { defaultReminders: [0] } }).success,
+    );
+    check(
+      'more than 5 reminders are refused',
+      !userPreferencesSchema.safeParse({ meetings: { defaultReminders: [1, 2, 3, 4, 5, 6] } })
+        .success,
+    );
+    check(
+      'a stored bad reminder list degrades to unset, other sections survive',
+      same(
+        parseStoredUserPreferences({
+          meetings: { defaultReminders: ['x'] },
+          appearance: { theme: 'dark' },
+        }),
+        {
+          appearance: { theme: 'dark' },
+        },
+      ),
+    );
+    const withMeetings = mergeUserPreferences(base, { meetings: { defaultReminders: [5] } });
+    check(
+      'a meetings PATCH merges next to the other sections',
+      same(withMeetings, { ...base, meetings: { defaultReminders: [5] } }),
+      JSON.stringify(withMeetings),
+    );
+    check(
+      'an empty default list (no reminders) is kept, replacing the old one',
+      same(
+        mergeUserPreferences(withMeetings, { meetings: { defaultReminders: [] } }).meetings
+          ?.defaultReminders,
+        [],
+      ),
+    );
+  }
+
   // ---- Service ------------------------------------------------------------
   {
     const db = new FakePreferencesDb();

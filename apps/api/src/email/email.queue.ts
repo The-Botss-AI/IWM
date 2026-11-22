@@ -111,6 +111,37 @@ export type EmailJobData =
       inviterName: string | null;
       url: string;
       expiresAtLabel: string | null;
+    })
+  | (OrgRoutingHint & {
+      /** A new response on a form the recipient owns. Title, who and a link
+       *  only: never answers, because tenants without their own mail server
+       *  send through the platform mailbox, whose Sent folder keeps a copy. */
+      kind: 'form-submission';
+      to: string;
+      formTitle: string;
+      submittedBy: string;
+      url: string;
+    })
+  | (OrgRoutingHint & {
+      /**
+       * A meeting invitation, update or cancellation for an external guest,
+       * with the calendar data (`ics`, METHOD:REQUEST or CANCEL). `rsvp` URLs
+       * carry a raw login-free token: never log them.
+       */
+      kind: 'meeting-invite';
+      variant: 'invite' | 'update' | 'cancel';
+      method: 'REQUEST' | 'CANCEL';
+      to: string;
+      recipientName: string | null;
+      organizerName: string;
+      replyTo: string | null;
+      title: string;
+      whenLabel: string;
+      repeatLabel: string | null;
+      location: string | null;
+      meetingUrl: string | null;
+      rsvp: { accept: string; maybe: string; decline: string } | null;
+      ics: string;
     });
 
 export const EMAIL_JOB_OPTIONS = {

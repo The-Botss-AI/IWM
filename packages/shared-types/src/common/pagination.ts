@@ -20,7 +20,7 @@ export const paginationMetaSchema = z.object({
 });
 export type PaginationMeta = z.infer<typeof paginationMetaSchema>;
 
-export const listResponseSchema = <T extends z.ZodTypeAny>(item: T) =>
+export const listResponseSchema = <T extends z.ZodType>(item: T) =>
   z.object({
     items: z.array(item),
     pagination: paginationMetaSchema,

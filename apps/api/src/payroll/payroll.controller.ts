@@ -20,6 +20,7 @@ import {
   type UpdatePayrollItemInput,
 } from '@botss/shared-types';
 
+import { RequireAddon } from '../addons/require-addon.decorator';
 import { RequireAbility } from '../common/decorators/required-ability.decorator';
 import { RequestUserScope, type UserScope } from '../common/decorators/user-scope.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
@@ -31,6 +32,7 @@ import { PayrollService } from './payroll.service';
  * Layer 5 finance revocation removes it from everyone else). Responses carry
  * salaries and bank details, so nothing here is reachable without it.
  */
+@RequireAddon('hr')
 @Controller('finance/payroll')
 export class PayrollController {
   constructor(private readonly payroll: PayrollService) {}

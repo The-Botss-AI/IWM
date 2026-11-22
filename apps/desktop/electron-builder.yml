@@ -45,6 +45,9 @@ mac:
   icon: build/icon.icns
 
 linux:
+  # The default comes from the package name (@botss/desktop), which newer
+  # electron-builder refuses as a file name.
+  executableName: iwm
   target:
     - AppImage
   category: Office

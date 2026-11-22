@@ -13,6 +13,8 @@ interface Props {
   id?: string;
   className?: string;
   'aria-label'?: string;
+  /** ids of help / error text, read when the input is focused. */
+  describedBy?: string | undefined;
 }
 
 export function TagInput({
@@ -23,6 +25,7 @@ export function TagInput({
   id,
   className,
   'aria-label': ariaLabel,
+  describedBy,
 }: Props) {
   const [draft, setDraft] = useState('');
 
@@ -89,6 +92,7 @@ export function TagInput({
         placeholder={value.length === 0 ? placeholder : ''}
         disabled={disabled}
         aria-label={ariaLabel}
+        aria-describedby={describedBy}
         className="placeholder:text-ink-disabled min-w-[100px] flex-1 bg-transparent text-sm outline-none"
       />
     </div>

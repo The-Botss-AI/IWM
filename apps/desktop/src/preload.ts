@@ -33,13 +33,14 @@ const api = {
     return () => ipcRenderer.removeListener('botss:powerState', listener);
   },
   /** Raise an OS banner. `tag` replaces an earlier banner with the same tag;
-   *  `type: 'call'` keeps it on screen until answered or dismissed. */
+   *  `type: 'call'` keeps it on screen until answered or dismissed;
+   *  `type: 'meeting-reminder'` stays up with sound until clicked or dismissed. */
   notify: (args: {
     title: string;
     body: string;
     url?: string;
     tag?: string;
-    type?: 'message' | 'call' | 'generic';
+    type?: 'message' | 'call' | 'meeting-reminder' | 'generic';
   }): Promise<void> => ipcRenderer.invoke('botss:notify', args),
 };
 

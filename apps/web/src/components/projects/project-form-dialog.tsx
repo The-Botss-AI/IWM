@@ -1,5 +1,6 @@
 'use client';
 
+import type { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { createProjectSchema, type CreateProjectInput, ProjectStatus } from '@botss/shared-types';
@@ -19,7 +20,7 @@ export function ProjectFormDialog({ onClose, defaultClientId }: Props) {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-  } = useForm<CreateProjectInput>({
+  } = useForm<z.input<typeof createProjectSchema>, unknown, CreateProjectInput>({
     resolver: zodResolver(createProjectSchema),
     defaultValues: {
       status: 'ACTIVE',

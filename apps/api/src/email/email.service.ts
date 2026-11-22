@@ -254,6 +254,59 @@ export class EmailService {
     );
   }
 
+  /** New response on a form the recipient owns (best effort, never throws). */
+  async sendFormSubmission(
+    organizationId: string,
+    args: {
+      to: string;
+      formTitle: string;
+      submittedBy: string;
+      url: string;
+    },
+  ): Promise<void> {
+    if (await this.isStub(organizationId)) return;
+    await this.enqueueSafe(
+      'form-submission',
+      { kind: 'form-submission', ...args, organizationId },
+      'form-submission',
+    );
+  }
+
+  /**
+   * Meeting invitations, updates and cancellations for external guests (one
+   * job each, so one bad address never blocks the others). Returns false when
+   * no transport is configured. The jobs carry RSVP links with raw tokens, so
+   * only the recipient address is logged.
+   */
+  /**
+   * Queue meeting invitations, updates and cancellations. Returns, per job
+   * in order, whether it was queued (all false without a mail transport), so
+   * the caller can act only on the emails that will really go out.
+   */
+  async sendMeetingEmails(
+    organizationId: string,
+    jobs: Array<Omit<Extract<EmailJobData, { kind: 'meeting-invite' }>, 'kind' | 'organizationId'>>,
+  ): Promise<boolean[]> {
+    if (jobs.length === 0) return [];
+    if (await this.isStub(organizationId)) {
+      this.logger.warn(
+        'Meeting emails NOT sent: no system mail transport. Configure SMTP_* (no-reply mailbox).',
+      );
+      return jobs.map(() => false);
+    }
+    const queued: boolean[] = [];
+    for (const job of jobs) {
+      queued.push(
+        await this.enqueueSafe(
+          'meeting-invite',
+          { kind: 'meeting-invite', ...job, organizationId },
+          `meeting-invite variant=${job.variant} to=${job.to}`,
+        ),
+      );
+    }
+    return queued;
+  }
+
   /**
    * Client portal mail (invite, access notice, password reset). Returns false
    * when no transport is configured, so staff know to share the link by hand.

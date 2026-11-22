@@ -21,7 +21,11 @@ import { SecurityAlertsService } from '../security-alerts/security-alerts.servic
 import { CpanelService } from '../cpanel/cpanel.service';
 import { ROOT_ORG_ID } from '../organizations/organizations.constants';
 import { assertNotClientAccount } from '../common/client-accounts';
-import { assertEmailDomainAllowed } from '../common/email-domain';
+import { addonDisabled } from '../addons/addon-errors';
+import { AddonsService } from '../addons/addons.service';
+import { assertEmailDomainAllowed, cpanelDomain } from '../common/email-domain';
+import { platformMailHosts, protectedAdminEmail } from '../common/platform-env';
+import { claimingOrgIdFor } from '../organizations/domain-claims';
 import { MailAccountsService } from '../mail/mail-accounts.service';
 import { RealtimeEventsService } from '../notifications/realtime-events.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -34,25 +38,6 @@ import { supportNotAllowed } from '../support/support-rules';
  * the auto-mail-provision and password-sync flows should run. Delegates to
  * `CpanelService.ownsEmail`, which reads `CPANEL_DOMAIN` from env.
  */
-/**
- * IMAP/SMTP hosts for auto-provisioned mail accounts, from
- * MAIL_DEFAULT_IMAP_HOST / MAIL_DEFAULT_SMTP_HOST. Null (no auto-provisioning)
- * unless both are set.
- */
-function defaultMailHosts(): { imapHost: string; smtpHost: string } | null {
-  const imapHost = process.env.MAIL_DEFAULT_IMAP_HOST?.trim();
-  const smtpHost = process.env.MAIL_DEFAULT_SMTP_HOST?.trim();
-  return imapHost && smtpHost ? { imapHost, smtpHost } : null;
-}
-
-/**
- * The protected primary admin address from ADMIN_EMAIL (lower-cased), or null
- * when unset: then no account is protected from demotion or deletion.
- */
-function primaryAdminEmail(): string | null {
-  return process.env.ADMIN_EMAIL?.trim().toLowerCase() || null;
-}
-
 function emailIsLocalToCpanel(cpanel: CpanelService, email: string): boolean {
   return cpanel.ownsEmail(email);
 }
@@ -76,7 +61,22 @@ export class AdminUsersService {
     private readonly sessions: SessionsService,
     @Optional() private readonly realtime?: RealtimeEventsService,
     @Optional() private readonly alerts?: SecurityAlertsService,
+    @Optional() private readonly addons?: AddonsService,
   ) {}
+
+  /**
+   * Whether the acting user's organization has `key` switched on. Without the
+   * add-on service (tests) everything counts as on, which is also the
+   * default for every organization that never changed it.
+   */
+  private async addonOn(actingUserId: string, key: 'cpanel' | 'mail'): Promise<boolean> {
+    if (!this.addons) return true;
+    const actor = await this.prisma.client.user.findUnique({
+      where: { id: actingUserId },
+      select: { organizationId: true },
+    });
+    return actor?.organizationId ? this.addons.isEnabled(actor.organizationId, key) : true;
+  }
 
   /**
    * Throws 403 unless the acting user holds an admin tier (ADMIN or
@@ -147,20 +147,14 @@ export class AdminUsersService {
       orgId,
       actorOrgIsRoot: org?.isRoot === true,
       email,
-      claimingOrgId: async (domain) => {
-        const claim = await this.prisma.client.organization.findFirst({
-          where: { emailDomain: domain, deletedAt: null },
-          select: { id: true },
-        });
-        return claim?.id ?? null;
-      },
+      claimingOrgId: (domain) => claimingOrgIdFor(this.prisma, domain),
     });
   }
 
   /**
-   * Global admin = `systemRole === 'SUPER_ADMIN'`. The Postgres trigger
-   * `trg_super_admin_root_only` guarantees those users live in the root
-   * org, so we no longer need to assert the org here. Gates platform
+   * Global admin = `systemRole === 'SUPER_ADMIN'`. The API only grants that
+   * role to users of the root org (see `update`), so the org is not
+   * asserted again here. Gates platform
    * operations only: organization management and the platform log. It
    * never grants access to data inside another organization.
    *
@@ -274,8 +268,7 @@ export class AdminUsersService {
       }
     }
     // SUPER_ADMIN may only be granted by another SUPER_ADMIN, AND the
-    // target must end up in the root org (the Postgres trigger enforces
-    // this at the DB layer too, but we reject early with a friendlier
+    // target must end up in the root org (rejected here with a clear
     // message). Tenant ADMINs still cannot grant ADMIN to anyone outside
     // their own org — that's covered by the targetOrgId clamp above.
     if (input.systemRole === 'SUPER_ADMIN') {
@@ -325,7 +318,10 @@ export class AdminUsersService {
         code: 'cpanel-platform-only',
       });
     }
-    if (platformActor && this.cpanel.isEnabled() && this.cpanel.ownsEmail(email)) {
+    // The cPanel add-on switched off: no mailbox is created, as if cPanel
+    // were not configured.
+    const cpanelOn = platformActor && (await this.addonOn(actingUserId, 'cpanel'));
+    if (cpanelOn && this.cpanel.isEnabled() && this.cpanel.ownsEmail(email)) {
       const cp = await this.cpanel.createEmail({
         email,
         password: input.password,
@@ -386,23 +382,25 @@ export class AdminUsersService {
     // happens almost every time in practice. Failure here is logged but
     // not fatal: the admin can still retry from the Mail accounts settings.
     const autoMailWorkspaceId = input.workspaceId ?? actingWorkspaceId;
-    const localToCpanel = platformActor && emailIsLocalToCpanel(this.cpanel, email);
+    const mailHosts = platformMailHosts();
+    const localToCpanel =
+      cpanelOn &&
+      emailIsLocalToCpanel(this.cpanel, email) &&
+      (await this.addonOn(actingUserId, 'mail'));
     if (!localToCpanel) {
       this.logger.log(
-        `Auto-MailAccount skip ${email}: not on CPANEL_DOMAIN (${process.env.CPANEL_DOMAIN ?? 'unset'}).`,
+        `Auto-MailAccount skip ${email}: not on CPANEL_DOMAIN (${process.env.CPANEL_DOMAIN ?? 'unset'}) or the cPanel or Mail add-on is off.`,
+      );
+    } else if (!mailHosts) {
+      this.logger.warn(
+        `Auto-MailAccount skip ${email}: MAIL_DEFAULT_IMAP_HOST / MAIL_DEFAULT_SMTP_HOST are not set.`,
       );
     } else if (!autoMailWorkspaceId) {
       this.logger.warn(
         `Auto-MailAccount skip ${email}: no workspaceId resolved for the acting admin. The user has no mailbox and will see "Set up my mailbox" on first login.`,
       );
     }
-    const mailHosts = defaultMailHosts();
-    if (localToCpanel && autoMailWorkspaceId && !mailHosts) {
-      this.logger.log(
-        `Auto-MailAccount skip ${email}: MAIL_DEFAULT_IMAP_HOST / MAIL_DEFAULT_SMTP_HOST not set.`,
-      );
-    }
-    if (localToCpanel && autoMailWorkspaceId && mailHosts) {
+    if (localToCpanel && mailHosts && autoMailWorkspaceId) {
       try {
         await this.mailAccounts.add(autoMailWorkspaceId, user.id, {
           email,
@@ -488,7 +486,7 @@ export class AdminUsersService {
     // Tenant boundary: every admin, SUPER_ADMIN included, may only edit
     // (and reset the password of) users inside their own org. Granting
     // SUPER_ADMIN requires the actor be a SUPER_ADMIN AND the target be in
-    // the root org (the Postgres trigger backstops the org rule).
+    // the root org.
     const actor = await this.prisma.client.user.findUnique({
       where: { id: actingUserId },
       select: { systemRole: true, organizationId: true },
@@ -520,13 +518,13 @@ export class AdminUsersService {
           : false,
     });
     // Block role demotion of the canonical admin so a misclick can't lock
-    // the team out of the admin panel. The canonical address comes from
-    // ADMIN_EMAIL; when unset no account is protected. Promoting them to
+    // the team out of the admin panel. The canonical address is ADMIN_EMAIL
+    // (no protected account when it is not set). Promoting them to
     // SUPER_ADMIN is fine (they're still privileged); only block demotion
     // to a non-admin tier.
-    const adminEmail = primaryAdminEmail();
+    const adminEmail = protectedAdminEmail();
     if (
-      adminEmail &&
+      adminEmail !== null &&
       target.email.toLowerCase() === adminEmail &&
       input.systemRole &&
       input.systemRole !== 'ADMIN' &&
@@ -597,7 +595,8 @@ export class AdminUsersService {
     if (
       input.password &&
       emailIsLocalToCpanel(this.cpanel, target.email) &&
-      (await this.actorIsPlatform(actingUserId))
+      (await this.actorIsPlatform(actingUserId)) &&
+      (await this.addonOn(actingUserId, 'cpanel'))
     ) {
       // 1. cPanel mailbox password - the source of truth for webmail auth.
       if (this.cpanel.isEnabled() && this.cpanel.ownsEmail(target.email)) {
@@ -745,8 +744,8 @@ export class AdminUsersService {
       targetRole: target.systemRole,
       actorHasRolesManage: false,
     });
-    const adminEmail = primaryAdminEmail();
-    if (adminEmail && target.email.toLowerCase() === adminEmail) {
+    const adminEmail = protectedAdminEmail();
+    if (adminEmail !== null && target.email.toLowerCase() === adminEmail) {
       throw new ForbiddenException({
         title: 'Cannot delete the primary admin',
         status: 403,
@@ -790,6 +789,7 @@ export class AdminUsersService {
       await tx.document.updateMany(matchByCreator).catch(() => undefined);
       await tx.documentTemplate.updateMany(matchByCreator).catch(() => undefined);
       await tx.taskForm.updateMany(matchByCreator).catch(() => undefined);
+      await tx.form.updateMany(matchByCreator).catch(() => undefined);
       await tx.savedView.updateMany(matchByCreator).catch(() => undefined);
       await tx.invoice.updateMany(matchByCreator).catch(() => undefined);
       await tx.holiday.updateMany(matchByCreator).catch(() => undefined);
@@ -798,6 +798,8 @@ export class AdminUsersService {
       await tx.goalUpdate.updateMany(matchByAuthor).catch(() => undefined);
       // Remaining required FKs with model-specific field names.
       await tx.documentAccess.updateMany(reassign('grantedById')).catch(() => undefined);
+      await tx.formVersion.updateMany(reassign('publishedById')).catch(() => undefined);
+      await tx.formAccess.updateMany(reassign('grantedById')).catch(() => undefined);
       await tx.documentRevision.updateMany(reassign('changedById')).catch(() => undefined);
       await tx.fileObject.updateMany(reassign('uploadedById')).catch(() => undefined);
       await tx.sprintTask.updateMany(reassign('addedById')).catch(() => undefined);
@@ -842,6 +844,9 @@ export class AdminUsersService {
     if (!this.cpanel.isEnabled()) return { items: [] };
     // Tenants never see the platform's mailboxes.
     if (!(await this.actorIsPlatform(actingUserId))) return { items: [] };
+    if (!(await this.addonOn(actingUserId, 'cpanel'))) return { items: [] };
+    const domain = cpanelDomain();
+    if (!domain) return { items: [] };
 
     const [mailboxes, existing] = await Promise.all([
       this.cpanel.listEmails(),
@@ -849,8 +854,7 @@ export class AdminUsersService {
         select: { email: true },
         where: {
           email: {
-            // isEnabled() above guarantees CPANEL_DOMAIN is set.
-            endsWith: `@${(process.env.CPANEL_DOMAIN ?? '').trim().toLowerCase()}`,
+            endsWith: `@${domain}`,
           },
         },
       }),
@@ -895,6 +899,7 @@ export class AdminUsersService {
         code: 'cpanel-platform-only',
       });
     }
+    if (!(await this.addonOn(actingUserId, 'cpanel'))) throw addonDisabled('cPanel mailboxes');
     const email = input.email.toLowerCase().trim();
 
     if (!this.cpanel.isEnabled()) {
@@ -1006,16 +1011,21 @@ export class AdminUsersService {
     if (!created) throw new NotFoundException({ title: 'User not found', status: 404 });
 
     const autoMailWorkspaceId = input.workspaceId ?? actingWorkspaceId;
-    const mailHosts = defaultMailHosts();
-    if (autoMailWorkspaceId && mailHosts) {
+    const importMailHosts = platformMailHosts();
+    if (!importMailHosts) {
+      this.logger.warn(
+        `Auto-MailAccount skip ${email}: MAIL_DEFAULT_IMAP_HOST / MAIL_DEFAULT_SMTP_HOST are not set.`,
+      );
+    }
+    if (autoMailWorkspaceId && importMailHosts && (await this.addonOn(actingUserId, 'mail'))) {
       try {
         await this.mailAccounts.add(autoMailWorkspaceId, created.id, {
           email,
           displayName: input.name,
-          imapHost: mailHosts.imapHost,
+          imapHost: importMailHosts.imapHost,
           imapPort: 993,
           imapSecure: true,
-          smtpHost: mailHosts.smtpHost,
+          smtpHost: importMailHosts.smtpHost,
           smtpPort: 465,
           smtpSecure: true,
           username: email,
