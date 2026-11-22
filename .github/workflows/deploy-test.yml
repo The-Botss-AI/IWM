@@ -1,0 +1,113 @@
+name: Deploy test instance
+
+# Builds every main commit that passed CI and delivers it to the IWM test
+# instance (iwm.thebotss.com). The host never builds: it only installs, sets up
+# the schema and swaps the finished build in (see /opt/iwm/deploy.sh there).
+#
+# Security:
+# - Runs from workflow_run, so it only ever runs this file as it is on main,
+#   and only for a CI run of a push to main in this repository (never a fork or
+#   a pull request; see the job's `if`).
+# - Secrets live in the `iwm-test` environment, which only `main` may use.
+# - The SSH key is accepted on the host only as the sandboxed `iwm` user with a
+#   forced command that stores a bundle and starts the deploy. It cannot open a
+#   shell, forward ports or run anything else.
+# - The host key is pinned (DEPLOY_KNOWN_HOSTS).
+#
+# Nothing is uploaded as an artifact: the bundle goes straight to the host.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-test
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: iwm-test
+    timeout-minutes: 60
+    env:
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6 # reads pnpm 9.15.9 from package.json
+      - uses: actions/setup-node@v7
+        with:
+          # The host runs Node 24.
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile # postinstall runs prisma generate
+
+      - name: Write the web build env from the environment's variables
+        env:
+          VARS_JSON: ${{ toJSON(vars) }}
+        run: |
+          set -euo pipefail
+          if jq -e 'to_entries | any(.key | startswith("NEXT_PUBLIC_")) | not' <<<"$VARS_JSON" >/dev/null; then
+            echo "::error::No NEXT_PUBLIC_* variables in the iwm-test environment."
+            exit 1
+          fi
+          if jq -e '[to_entries[] | select(.key | startswith("NEXT_PUBLIC_")) | .value | test("[\r\n]")] | any' <<<"$VARS_JSON" >/dev/null; then
+            echo "::error::A NEXT_PUBLIC_* variable contains a line break."
+            exit 1
+          fi
+          jq -r 'to_entries[] | select(.key | startswith("NEXT_PUBLIC_")) | select(.value != "") | "\(.key)=\(.value)"' \
+            <<<"$VARS_JSON" > apps/web/.env.production
+          echo "Web build env: $(cut -d= -f1 apps/web/.env.production | sort | tr '\n' ' ')"
+
+      - name: Build API and web
+        run: pnpm build --filter=@botss/api --filter=@botss/web
+
+      - name: Bundle the build
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$DEPLOY_SHA" > BUILD_SHA
+          # Name and a short hash per NEXT_PUBLIC_* value, never the value.
+          # deploy.sh on the host computes the same from its env files.
+          while IFS= read -r line; do
+            k=${line%%=*}; v=${line#*=}
+            [ -n "$v" ] || continue
+            printf '%s %s\n' "$k" "$(printf '%s' "$v" | sha256sum | cut -c1-16)"
+          done < apps/web/.env.production | LC_ALL=C sort > PUBLIC_ENV_FINGERPRINT
+          mapfile -t pkg_dists < <(find packages -mindepth 2 -maxdepth 2 -name dist -type d | sort)
+          tar -czf "$RUNNER_TEMP/bundle.tgz" --exclude='apps/web/.next/cache' \
+            BUILD_SHA PUBLIC_ENV_FINGERPRINT apps/api/dist apps/web/.next "${pkg_dists[@]}"
+          echo "Bundle: $(du -h "$RUNNER_TEMP/bundle.tgz" | cut -f1)"
+
+      - name: Deliver and deploy
+        timeout-minutes: 45
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Bad SHA."; exit 1; }
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # The host's forced command reads the bundle from stdin, deploys it
+          # and prints the deploy log; its exit code is this step's result.
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o ServerAliveInterval=30 "iwm@$DEPLOY_HOST" "deploy $DEPLOY_SHA" < "$RUNNER_TEMP/bundle.tgz"
+
+      - name: Remove the SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
