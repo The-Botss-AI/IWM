@@ -17,6 +17,7 @@
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -219,6 +220,22 @@ async function prepareDatabase() {
   ok(`Schema is up to date (${kind})`);
 
   step('Seeding demo data');
+  // Same rule as docker/db-setup.mjs: only an empty database gets the demo
+  // data, so a rerun never adds demo accounts to a database in use.
+  const { PrismaClient } = createRequire(join(ROOT, 'packages/database/package.json'))(
+    '@prisma/client',
+  );
+  const prisma = new PrismaClient({ datasourceUrl: databaseUrl });
+  let users = 0;
+  try {
+    users = await prisma.user.count();
+  } finally {
+    await prisma.$disconnect();
+  }
+  if (users > 0) {
+    ok('The database already has users, demo seed skipped');
+    return;
+  }
   if (!run('pnpm', ['db:seed:dev']).ok) {
     fail('Seeding failed (see the output above).');
   }

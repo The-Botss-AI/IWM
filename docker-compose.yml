@@ -270,6 +270,7 @@ services:
     environment:
       DATABASE_URL: postgresql://botss:botss@postgres:5432/botss?schema=public
       S3_ENDPOINT: http://minio:9000
+      REDIS_URL: redis://redis:6379
     depends_on:
       postgres:
         condition: service_healthy

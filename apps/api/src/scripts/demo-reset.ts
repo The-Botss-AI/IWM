@@ -7,13 +7,17 @@
  * Refuses to run unless:
  *   - DEMO_MODE=true (the API of a demo server runs with it too),
  *   - the flag above is passed,
- *   - every user in the database has an @example.com address or one on the
- *     domain of DEMO_LOGIN_EMAIL. A demo never has anyone else, because the
- *     demo API refuses new people and email changes. A real install does, so
- *     a DEMO_MODE set there by mistake still stops here.
+ *   - every user in the database has an @example.com address or is exactly
+ *     DEMO_LOGIN_EMAIL. A demo never has anyone else, because the demo API
+ *     refuses new people and email changes. A real install does, so a
+ *     DEMO_MODE set there by mistake still stops here;
+ *   - every organization other than the root one is the seed's demo org;
+ *   - DEMO_S3_BUCKET is set and equals S3_BUCKET, a second, deliberate
+ *     confirmation of which bucket gets emptied.
  *
- * Steps: delete every object in S3_BUCKET, TRUNCATE every table except
- * `_prisma_migrations`, run packages/database/prisma/seed.ts. Never point it
+ * Steps: clear the demo upload counter, delete every object in S3_BUCKET,
+ * TRUNCATE every table except `_prisma_migrations`, run
+ * packages/database/prisma/seed.ts. Never point it
  * at a real install. See README, "Run a public demo".
  */
 import 'reflect-metadata';
@@ -24,35 +28,67 @@ import { join, resolve } from 'node:path';
 
 import { DeleteObjectsCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { rawPrisma } from '@botss/database';
+import IORedis from 'ioredis';
 
-import { isDemoMode } from '../common/demo-mode';
+import { DEMO_UPLOAD_BYTES_KEY, isDemoMode } from '../common/demo-mode';
 import { createS3Client } from '../files/files.service';
 
 const CONFIRM_FLAG = '--yes-delete-all-demo-data';
 const ROOT = resolve(__dirname, '../../../..');
+/** The organization id packages/database/prisma/seed.ts creates. */
+const DEMO_ORG_ID = 'seed_org_demo';
 
 function stop(msg: string): never {
   console.error(`[demo-reset] stopped: ${msg}`);
   process.exit(1);
 }
 
-function allowedDomains(): Set<string> {
-  const domains = new Set(['example.com']);
+function isDemoUser(email: string): boolean {
+  const address = email.trim().toLowerCase();
   const login = process.env.DEMO_LOGIN_EMAIL?.trim().toLowerCase();
-  const domain = login?.split('@')[1];
-  if (domain) domains.add(domain);
-  return domains;
+  return address.endsWith('@example.com') || (!!login && address === login);
 }
 
 async function assertDemoDatabase(): Promise<void> {
-  const allowed = allowedDomains();
   const users = await rawPrisma.user.findMany({ select: { email: true } });
-  const outsiders = users.filter((u) => !allowed.has(u.email.toLowerCase().split('@')[1] ?? ''));
+  const outsiders = users.filter((u) => !isDemoUser(u.email));
   if (outsiders.length > 0) {
     stop(
-      `${outsiders.length} user(s) have addresses outside ${[...allowed].join(', ')}. ` +
+      `${outsiders.length} user(s) are neither @example.com nor DEMO_LOGIN_EMAIL. ` +
         'This does not look like a demo database; nothing was deleted.',
     );
+  }
+  const orgs = await rawPrisma.organization.findMany({
+    where: { isRoot: false, id: { not: DEMO_ORG_ID } },
+    select: { id: true },
+  });
+  if (orgs.length > 0) {
+    stop(
+      `${orgs.length} organization(s) besides the root and the demo org (${DEMO_ORG_ID}) exist. ` +
+        'This does not look like a demo database; nothing was deleted.',
+    );
+  }
+}
+
+function demoBucket(): string {
+  const bucket = process.env.S3_BUCKET ?? 'botss-files';
+  const confirmed = process.env.DEMO_S3_BUCKET?.trim();
+  if (!confirmed || confirmed !== bucket) {
+    stop(
+      `DEMO_S3_BUCKET must be set to the S3_BUCKET being emptied (${bucket}). Nothing was deleted.`,
+    );
+  }
+  return bucket;
+}
+
+async function clearUploadCounter(): Promise<void> {
+  const redis = new IORedis(process.env.REDIS_URL ?? 'redis://localhost:6379', {
+    maxRetriesPerRequest: 3,
+  });
+  try {
+    await redis.del(DEMO_UPLOAD_BYTES_KEY);
+  } finally {
+    redis.disconnect();
   }
 }
 
@@ -66,8 +102,7 @@ async function truncateAll(): Promise<number> {
   return tables.length;
 }
 
-async function emptyBucket(): Promise<number> {
-  const bucket = process.env.S3_BUCKET ?? 'botss-files';
+async function emptyBucket(bucket: string): Promise<number> {
   const s3 = createS3Client(process.env.S3_ENDPOINT ?? 'http://localhost:9100');
   let deleted = 0;
   let token: string | undefined;
@@ -101,10 +136,14 @@ async function main(): Promise<void> {
   if (!process.argv.includes(CONFIRM_FLAG)) {
     stop(`pass ${CONFIRM_FLAG} to confirm that every row and file will be deleted.`);
   }
+  const bucket = demoBucket();
   await assertDemoDatabase();
 
-  // Files first: if storage is unreachable, the database is left as it was.
-  const files = await emptyBucket();
+  // Redis and files first: if either is unreachable, the database is left
+  // as it was.
+  await clearUploadCounter();
+  console.log('[demo-reset] cleared the upload counter');
+  const files = await emptyBucket(bucket);
   console.log(`[demo-reset] deleted ${files} file(s) from storage`);
   const tables = await truncateAll();
   console.log(`[demo-reset] emptied ${tables} tables`);

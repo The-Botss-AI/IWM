@@ -295,6 +295,9 @@ async function bootstrap(): Promise<void> {
     message: { title: 'Too many auth attempts. Try again later.', status: 429 },
     // Pre-flight CORS requests should not count toward the bucket.
     skip: (req) => req.method === 'OPTIONS',
+    // Only failed attempts count, so visitors sharing a login (the demo)
+    // are not locked out by each other's successful sign-ins.
+    skipSuccessfulRequests: true,
   });
   expressApp.use('/api/auth/sign-in', authLimiter);
   expressApp.use('/api/auth/sign-up', authLimiter);

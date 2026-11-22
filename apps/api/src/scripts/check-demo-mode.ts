@@ -22,7 +22,12 @@ import { type ArgumentsHost, type ExecutionContext, Logger } from '@nestjs/commo
 import { DEMO_MODE_PROBLEM_CODE } from '@botss/shared-types';
 
 import { CpanelService } from '../cpanel/cpanel.service';
-import { DEMO_BLOCKED_ROUTES, DEMO_MAX_UPLOAD_BYTES, demoBlockReason } from '../common/demo-mode';
+import {
+  DEMO_BLOCKED_ROUTES,
+  DEMO_MAX_STORAGE_BYTES,
+  DEMO_MAX_UPLOAD_BYTES,
+  demoBlockReason,
+} from '../common/demo-mode';
 import { ProblemDetailsExceptionFilter } from '../common/filters/problem-details.filter';
 import { DemoModeGuard } from '../common/guards/demo-mode.guard';
 import { MailSender } from '../email/mail.sender';
@@ -31,6 +36,7 @@ import { MailSendService } from '../mail/mail-send.service';
 import { NotificationsPushService } from '../notifications/notifications-push.service';
 import type { RealtimeEventsService } from '../notifications/realtime-events.service';
 import type { PrismaService } from '../prisma/prisma.service';
+import type { RedisService } from '../redis/redis.service';
 
 Logger.overrideLogger(false);
 const realLog = console.log;
@@ -119,6 +125,14 @@ const BLOCKED: [string, string, unknown?][] = [
   ['POST', `/api/v1/documents/${ID}/share`],
   ['POST', `/api/v1/form-builder/${ID}/public-link`],
   ['POST', `/api/v1/form-builder/${ID}/public-link/rotate`],
+  ['POST', `/api/v1/projects/${ID}/forms`, { name: 'Intake', isPublic: true }],
+  ['PATCH', `/api/v1/forms/${ID}`, { isPublic: true }],
+  ['POST', `/api/v1/signatures/${ID}/send`],
+  ['POST', `/api/v1/signatures/${ID}/signers/${ID}/resend`],
+  ['PATCH', `/api/v1/admin/users/${ID}`, { name: 'Someone else' }],
+  // Express routes are case-insensitive.
+  ['POST', '/API/V1/ADMIN/USERS'],
+  ['PATCH', '/api/v1/Users/Me', { name: 'Someone else' }],
 ];
 
 const ALLOWED: [string, string, unknown?][] = [
@@ -133,6 +147,8 @@ const ALLOWED: [string, string, unknown?][] = [
   ['PATCH', `/api/v1/meetings/${ID}`, { title: 'Renamed' }],
   ['PATCH', '/api/v1/users/me', { timezone: 'Europe/Berlin' }],
   ['PATCH', `/api/v1/admin/users/${ID}`, { phone: '+1 555 0100' }],
+  ['POST', `/api/v1/projects/${ID}/forms`, { name: 'Intake', isPublic: false }],
+  ['PATCH', `/api/v1/forms/${ID}`, { name: 'Renamed' }],
   ['POST', '/api/v1/files/presign', { sizeBytes: 10 }],
   ['GET', '/api/v1/admin/users'],
   ['GET', '/api/v1/addons'],
@@ -282,7 +298,14 @@ async function main(): Promise<void> {
       formUpload: { aggregate: async () => ({ _sum: { sizeBytes: 0n } }) },
     },
   } as unknown as PrismaService;
-  const files = new FilesService(filesPrisma);
+  let reserved = 0;
+  const redis = {
+    client: {
+      incrby: async (_key: string, n: number) => (reserved += n),
+      decrby: async (_key: string, n: number) => (reserved -= n),
+    },
+  } as unknown as RedisService;
+  const files = new FilesService(filesPrisma, redis);
   const isDemoRefusal = (err: { getResponse?: () => { code?: string } }) =>
     err.getResponse?.().code === DEMO_MODE_PROBLEM_CODE;
   await assert.rejects(
@@ -305,6 +328,14 @@ async function main(): Promise<void> {
     sizeBytes: 1000,
   });
   assert.ok(ok.uploadUrl, 'a small upload is still allowed');
+  assert.equal(reserved, 1000, 'the presign reserved its bytes');
+  // Presigns in flight count before any file is confirmed.
+  reserved = DEMO_MAX_STORAGE_BYTES - 500;
+  await assert.rejects(
+    files.presign('ws_check', { filename: 'a.png', mimeType: 'image/png', sizeBytes: 1000 }),
+    isDemoRefusal,
+  );
+  assert.equal(reserved, DEMO_MAX_STORAGE_BYTES - 500, 'a refused presign releases its bytes');
 
   delete process.env.DEMO_MODE;
   console.log = realLog;

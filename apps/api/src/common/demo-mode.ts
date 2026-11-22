@@ -25,6 +25,8 @@ export function isDemoMode(env: NodeJS.ProcessEnv = process.env): boolean {
 export const DEMO_MAX_UPLOAD_BYTES = 1024 * 1024;
 /** All uploaded files together, until the nightly reset. */
 export const DEMO_MAX_STORAGE_BYTES = 200 * 1024 * 1024;
+/** Redis counter of bytes reserved for uploads since the last reset. */
+export const DEMO_UPLOAD_BYTES_KEY = 'demo:upload-bytes';
 
 export function demoModeForbidden(detail: string): ForbiddenException {
   return new ForbiddenException({
@@ -57,13 +59,16 @@ export interface DemoRule {
 }
 
 const ID = '[^/]+';
-const route = (pattern: string): RegExp => new RegExp(`^${pattern.replaceAll(':id', ID)}/?$`);
+// Express matches routes case-insensitively, so the guard must too.
+const route = (pattern: string): RegExp => new RegExp(`^${pattern.replaceAll(':id', ID)}/?$`, 'i');
 const has = (body: Body, key: string): boolean => body?.[key] !== undefined;
 
 const PEOPLE = 'Adding or inviting people is turned off in the live demo.';
 const SHARED_ACCOUNTS =
   'Everyone shares the demo accounts, so changing their password, email, role or sessions is turned off in the live demo.';
 const MAIL = 'Mail accounts and sending mail are turned off in the live demo.';
+const PUBLIC_LINKS = 'Public links are turned off in the live demo.';
+const SIGNING = 'Sending documents for signature is turned off in the live demo.';
 const SETTINGS = 'Add on, mail and domain settings are turned off in the live demo.';
 
 export const DEMO_BLOCKED_ROUTES: readonly DemoRule[] = [
@@ -98,7 +103,7 @@ export const DEMO_BLOCKED_ROUTES: readonly DemoRule[] = [
     method: 'PATCH',
     path: route('/admin/users/:id'),
     detail: SHARED_ACCOUNTS,
-    when: (b) => has(b, 'password') || has(b, 'systemRole'),
+    when: (b) => has(b, 'password') || has(b, 'systemRole') || has(b, 'name'),
   },
   {
     method: 'PATCH',
@@ -199,6 +204,22 @@ export const DEMO_BLOCKED_ROUTES: readonly DemoRule[] = [
     path: route('/form-builder/:id/public-link/rotate'),
     detail: 'Public links are turned off in the live demo.',
   },
+  {
+    method: 'POST',
+    path: route('/projects/:id/forms'),
+    detail: PUBLIC_LINKS,
+    when: (b) => b?.isPublic === true,
+  },
+  {
+    method: 'PATCH',
+    path: route('/forms/:id'),
+    detail: PUBLIC_LINKS,
+    when: (b) => b?.isPublic === true,
+  },
+
+  // Signature requests mail people outside the demo.
+  { method: 'POST', path: route('/signatures/:id/send'), detail: SIGNING },
+  { method: 'POST', path: route('/signatures/:id/signers/:id/resend'), detail: SIGNING },
 ];
 
 function hasGuestEmails(body: Body): boolean {
@@ -216,8 +237,11 @@ export function demoBlockReason(
   body: unknown,
   apiPrefix = process.env.API_BASE_PATH ?? '/api/v1',
 ): string | null {
-  const prefix = `/${apiPrefix.replace(/^\/+|\/+$/g, '')}`;
-  const bare = path.startsWith(`${prefix}/`) ? path.slice(prefix.length) : path;
+  // Lowercased: Express routes are case-insensitive, so `/API/V1/Users/Me`
+  // reaches the same handler as `/api/v1/users/me`.
+  const prefix = `/${apiPrefix.replace(/^\/+|\/+$/g, '')}`.toLowerCase();
+  const lower = path.toLowerCase();
+  const bare = lower.startsWith(`${prefix}/`) ? lower.slice(prefix.length) : lower;
   const verb = method.toUpperCase();
   const json = body && typeof body === 'object' ? (body as Record<string, unknown>) : undefined;
   for (const rule of DEMO_BLOCKED_ROUTES) {

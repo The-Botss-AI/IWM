@@ -246,13 +246,17 @@ if (!demoReset) {
     problems.push('The demo-reset service must stay behind the `demo` profile.');
   }
   if (!demoReset.includes('src/scripts/demo-reset.ts') || !demoReset.includes('postgres:5432')) {
-    problems.push('The demo-reset service must run src/scripts/demo-reset.ts against the compose Postgres.');
+    problems.push(
+      'The demo-reset service must run src/scripts/demo-reset.ts against the compose Postgres.',
+    );
   }
 }
 const resetScript = read('apps/api/src/scripts/demo-reset.ts');
 for (const needle of ['isDemoMode()', '--yes-delete-all-demo-data', '_prisma_migrations']) {
   if (!resetScript.includes(needle)) {
-    problems.push(`apps/api/src/scripts/demo-reset.ts no longer contains "${needle}" (a safety check).`);
+    problems.push(
+      `apps/api/src/scripts/demo-reset.ts no longer contains "${needle}" (a safety check).`,
+    );
   }
 }
 
