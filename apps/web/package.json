@@ -50,7 +50,7 @@
     "@tiptap/html": "^3.33.1",
     "@tiptap/pm": "^3.33.1",
     "@tiptap/react": "^3.33.1",
-    "@tiptap/starter-kit": "^3.33.1",
+    "@tiptap/starter-kit": "^3.34.0",
     "@tiptap/extensions": "^3.33.1",
     "@tiptap/suggestion": "^3.33.1",
     "better-auth": "1.7.16",
