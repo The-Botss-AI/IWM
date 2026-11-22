@@ -366,7 +366,7 @@ export class WorkspacesService {
           email,
           name: input.name?.trim() || email.split('@')[0] || email,
           emailVerified: false,
-          timezone: 'Asia/Karachi',
+          timezone: 'UTC',
           locale: 'en',
           // Pin the new user to the workspace's org so the auto-route
           // service can't subsequently move them somewhere else based on

@@ -84,6 +84,8 @@ change `packages/database/prisma/schema.prisma`:
    a note in the pull request and in the README upgrade notes.
 3. Commit the new migration folder together with the schema change. Never edit
    a migration that has already shipped.
+4. Don't end a migration name in `_init` or `_upgrade`: setup reads those as an
+   old install's local migrations and moves them aside.
 
 `pnpm quickstart`, the Docker `db-setup` step and production deploys only run
 `prisma migrate deploy` (`pnpm db:migrate:deploy`).

@@ -48,7 +48,7 @@ function fakeIo({ tables, recorded, local, diffs }) {
     },
     execSql: async (sql) => calls.push(['exec', sql]),
     migrateDeploy: async () => calls.push(['deploy']),
-    resolveApplied: async (name) => calls.push(['resolve', name]),
+    markApplied: async (names) => calls.push(['mark-applied', names]),
     backupLegacy: async (names) => {
       calls.push(['backup', names]);
       return 'backup-folder';
@@ -73,6 +73,15 @@ describe('classifyDiff', () => {
       'ALTER TABLE "A" ALTER COLUMN "b" SET DATA TYPE INTEGER;',
       'DELETE FROM "A";',
       'DROP TABLE "A";',
+      'ALTER TABLE "A" ALTER COLUMN "b" TYPE INTEGER USING "b"::integer;',
+      'UPDATE "A" SET "b" = 1;',
+      `INSERT INTO "A" ("id") VALUES ('x');`,
+      'ALTER TABLE "A" DROP "col";',
+      'ALTER TABLE "A" ADD COLUMN "c" TEXT, DROP COLUMN "d";',
+      'ALTER TABLE "A" ALTER COLUMN "b" SET DEFAULT 1, ALTER COLUMN "c" DROP NOT NULL;',
+      'ALTER TABLE "A" ALTER COLUMN "b" DROP DEFAULT;',
+      'ALTER INDEX "a_idx" RENAME TO "b_idx";',
+      'TRUNCATE "A";',
     ]) {
       expect(classifyDiff(sql).destructive, sql).toHaveLength(1);
     }
@@ -83,6 +92,26 @@ describe('classifyDiff', () => {
     );
     expect(d.additive).toHaveLength(1);
     expect(d.destructive).toHaveLength(0);
+  });
+  it('reads SET DEFAULT as safe: it changes no rows', () => {
+    const d = classifyDiff(
+      `ALTER TABLE "User" ALTER COLUMN "timezone" SET DEFAULT 'UTC';
+ALTER TABLE "Organization" ALTER COLUMN "baseCurrency" SET DEFAULT 'USD';`,
+    );
+    expect(d.additive).toHaveLength(2);
+    expect(d.destructive).toHaveLength(0);
+  });
+  it('ignores words inside quoted names, string literals and index methods', () => {
+    const d = classifyDiff(
+      `CREATE TABLE "Note" ("id" TEXT NOT NULL, "type" TEXT NOT NULL DEFAULT 'drop', CONSTRAINT "Note_pkey" PRIMARY KEY ("id"));
+ALTER TABLE "Note" ADD COLUMN "renamedAt" TIMESTAMP(3);
+CREATE TYPE "Kind" AS ENUM ('DROP', 'TYPE');
+CREATE INDEX "Note_type_trgm_idx" ON "Note" USING GIN ("type" gin_trgm_ops);
+CREATE UNIQUE INDEX "Note_id_key" ON "Note"("id");
+CREATE EXTENSION IF NOT EXISTS pg_trgm;`,
+    );
+    expect(d.destructive).toEqual([]);
+    expect(d.additive).toHaveLength(6);
   });
   it('keeps index drops apart: the extra index stays in place', () => {
     const d = classifyDiff(EXTRA_INDEX);
@@ -169,8 +198,7 @@ describe('setupSchema', () => {
     expect(io.calls).toEqual([
       ['diff'],
       ['backup', ['20250301120000_init']],
-      ['clear-history'],
-      ['resolve', INIT_MIGRATION],
+      ['mark-applied', [INIT_MIGRATION]],
       ['deploy'],
     ]);
   });
@@ -183,15 +211,7 @@ describe('setupSchema', () => {
       diffs: [ADD_TABLE, ''],
     });
     expect(await setupSchema(io)).toBe('adopt-behind');
-    expect(kinds(io)).toEqual([
-      'diff',
-      'exec',
-      'diff',
-      'backup',
-      'clear-history',
-      'resolve',
-      'deploy',
-    ]);
+    expect(kinds(io)).toEqual(['diff', 'exec', 'diff', 'backup', 'mark-applied', 'deploy']);
     const sql = io.calls.find((c) => c[0] === 'exec')[1];
     expect(sql).toContain('CREATE TABLE "Meeting"');
     expect(sql).not.toMatch(/DROP/);
