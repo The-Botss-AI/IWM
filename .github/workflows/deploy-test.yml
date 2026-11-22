@@ -1,16 +1,19 @@
 name: Deploy test instance
 
 # Builds every main commit that passed CI and delivers it to the IWM test
-# instance (iwm.thebotss.com). The host never builds: it only installs, sets up
+# instance (iwm.thebotss.com) and the public demo (demo.iwm.thebotss.com).
+# Each is its own matrix job with its own environment, variables and key. The host never builds: it only installs, sets up
 # the schema and swaps the finished build in (see /opt/iwm/deploy.sh there).
 #
 # Security:
 # - Runs from workflow_run, so it only ever runs this file as it is on main,
 #   and only for a CI run of a push to main in this repository (never a fork or
 #   a pull request; see the job's `if`).
-# - Secrets live in the `iwm-test` environment, which only `main` may use.
-# - The SSH key is accepted on the host only as the sandboxed `iwm` user with a
-#   forced command that stores a bundle and starts the deploy. It cannot open a
+# - Secrets live in the `iwm-test` and `iwm-demo` environments, which only
+#   `main` may use.
+# - Each SSH key is accepted on the host only as the sandboxed `iwm` user with
+#   a forced command that stores a bundle and starts that target's deploy; the
+#   target comes from the key, so the demo key cannot deploy the test instance. It cannot open a
 #   shell, forward ports or run anything else.
 # - The host key is pinned (DEPLOY_KNOWN_HOSTS).
 #
@@ -25,10 +28,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: deploy-test
-  cancel-in-progress: false
-
 jobs:
   deploy:
     if: >-
@@ -36,8 +35,16 @@ jobs:
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [iwm-test, iwm-demo]
+    name: deploy (${{ matrix.environment }})
+    concurrency:
+      group: deploy-${{ matrix.environment }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
-    environment: iwm-test
+    environment: ${{ matrix.environment }}
     timeout-minutes: 60
     env:
       DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
@@ -60,7 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           if jq -e 'to_entries | any(.key | startswith("NEXT_PUBLIC_")) | not' <<<"$VARS_JSON" >/dev/null; then
-            echo "::error::No NEXT_PUBLIC_* variables in the iwm-test environment."
+            echo "::error::No NEXT_PUBLIC_* variables in the ${{ matrix.environment }} environment."
             exit 1
           fi
           if jq -e '[to_entries[] | select(.key | startswith("NEXT_PUBLIC_")) | .value | test("[\r\n]")] | any' <<<"$VARS_JSON" >/dev/null; then
