@@ -5,6 +5,10 @@ An open-source, self-hostable all-in-one workspace for teams. It covers projects
 IWM is a TypeScript monorepo: a NestJS API, a Next.js web app, an Electron desktop shell and an Expo mobile app, all sharing Zod schemas and a typed API client. See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together.
 
 <p align="center">
+  <img src="docs/screenshots/tour.gif" alt="Short tour: project board, task, chat, calendar and invoice" width="98%">
+</p>
+
+<p align="center">
   <img src="docs/screenshots/project-board.png" alt="Project board with tasks in columns" width="49%">
   <img src="docs/screenshots/chat-channel.png" alt="Chat channel with messages" width="49%">
 </p>
