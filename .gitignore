@@ -22,10 +22,10 @@ apps/desktop/build/*
 # Generated
 **/generated/
 .prisma/
-# Local Prisma migrations created by `pnpm db:migrate --name init`. The public
-# repo does not ship a migration history yet; generate your own from
-# schema.prisma (see README).
-packages/database/prisma/migrations/
+# Migrations from installs made before the repo shipped its own history.
+# `pnpm quickstart` and the Docker db-setup step move them here (see README,
+# "Upgrading an existing install").
+packages/database/prisma/migrations-backup/
 
 # Logs
 *.log

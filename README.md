@@ -126,17 +126,29 @@ To run one app only: `pnpm dev --filter=@botss/web` or `pnpm dev --filter=@botss
 
 ### Upgrading an existing install
 
-This release only adds to the schema; there are no drops or renames, so no data is lost:
+The repo now ships its migration history in `packages/database/prisma/migrations`, starting with one `init` migration. Installs made before that created their own local `init` migration (the folder was gitignored) or used `db push`. After `git pull`, run the setup you normally use; neither needs a manual migration any more:
+
+- **Local:** `pnpm install`, then `pnpm quickstart`.
+- **Docker:** `docker compose --profile app up -d --build`.
+
+Both check what the database already has:
+
+- **Fresh database:** the shipped migrations are applied with `prisma migrate deploy`.
+- **Database already on the shipped history:** `prisma migrate deploy` applies whatever shipped since.
+- **Existing database without the shipped history:** it is compared with `schema.prisma` (`prisma migrate diff --from-schema-datasource --to-schema-datamodel`).
+  - If it matches, nothing in it changes.
+  - If it is behind (an older IWM), the missing tables, columns, enum values and indexes are added, but only when every change is purely additive.
+  - If bringing it in line would drop, rename, retype or delete anything, setup stops, prints the SQL and changes nothing. Review it and bring the database in line yourself.
+  - Indexes the database has and the schema does not (for example SQL-only search indexes from your own migrations) are kept.
+  - Then the shipped migrations are marked as applied (`prisma migrate resolve --applied`). Your old local migration folders and a copy of the old `_prisma_migrations` rows move to `packages/database/prisma/migrations-backup/<time>/` (gitignored). Nothing is deleted from your data.
+
+For a production database, take a backup first and run the same step against it, or by hand: `pnpm --filter @botss/database exec prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --script` to see the difference, then `prisma migrate resolve --applied <name>` for each folder in `packages/database/prisma/migrations` once it matches. Then restart the API and worker.
+
+This release only adds to the schema compared with the previous one; there are no drops or renames, so no data is lost:
 
 - new tables `OrganizationAddon`, `OrganizationDomain`, `Form`, `FormVersion`, `FormAccess`, `FormSubmission`, `FormUpload`, `Meeting`, `MeetingAttendee`, `MeetingOccurrence`, `MeetingReminder`, `MeetingReminderDelivery`, `MeetingFeedToken`,
 - new nullable `Account` columns `accessTokenExpiresAt`, `refreshTokenExpiresAt`, `scope`,
 - new enum values `LEAVE_REQUESTED`, `FORM_SUBMITTED`, `FORM_SHARED`, `MEETING_INVITE`, `MEETING_UPDATED`, `MEETING_CANCELLED`, `MEETING_RSVP`, `MEETING_REMINDER`.
-
-Migrations are not in the repo, so create the one for this change yourself, then restart the API and worker.
-
-- **Development:** `pnpm db:migrate --name forms_addons_domains` (writes the migration and applies it).
-- **Production:** never run `migrate dev` against production. Against a dev copy of the database run `pnpm --filter @botss/database exec prisma migrate dev --create-only --name forms_addons_domains`, review the SQL, copy the migration folder to the production checkout, then run `pnpm --filter @botss/database exec prisma migrate deploy` there.
-- **Docker only:** `docker compose --profile app up -d --build`. The `db-setup` step applies your migrations, then compares `schema.prisma` with the database and, if it is behind, writes and applies an `_upgrade` migration into `packages/database/prisma/migrations`. It only does this for purely additive changes: if the difference would drop, rename or delete anything (for example SQL-only indexes from your own migrations) it stops and prints the SQL so you can handle it yourself. Fresh installs still get an `init` migration as before.
 
 Two behaviour changes to check:
 
@@ -166,7 +178,7 @@ A `.env` is optional. Without one, the API generates `BETTER_AUTH_SECRET` and `M
 
 What happens on `up`: Postgres, Redis, MinIO and Gotenberg start, `minio-init` creates the uploads bucket, `db-setup` creates the schema and seeds the demo data (on a database with no users only), then the API (port 4000) and the web app (port 3000) start.
 
-If an update changes `packages/database/prisma/schema.prisma`, existing installs need a migration for it first; see "Migration history" under [Not included in this release](#11-not-included-in-this-release).
+Updates ship their migrations; `up` applies them. See [Upgrading an existing install](#upgrading-an-existing-install) for databases made before the repo shipped migrations.
 
 Docker and `pnpm quickstart` share the same database and migration history, so you can switch between them. Stop the `app` containers before `pnpm dev` (both use ports 3000 and 4000). If you started with Docker and no `.env` and later move to `pnpm dev`, copy the generated secrets into `.env` first, or mailbox passwords saved under Docker cannot be decrypted:
 
@@ -240,10 +252,10 @@ The same steps by hand, if you prefer to see each one or use your own PostgreSQL
 
    The compose credentials are development defaults, so change them before exposing a host. On first start the compose file installs `pg_trgm`. If you use your own PostgreSQL instead, run `CREATE EXTENSION IF NOT EXISTS pg_trgm;` in your database and in `template1` (Prisma's shadow database) before creating the schema.
 
-4. Create the schema.
+4. Create the schema from the shipped migrations.
 
    ```bash
-   pnpm db:migrate --name init
+   pnpm db:migrate:deploy
    ```
 
 5. Seed demo data (idempotent, refuses to run in production).
@@ -260,20 +272,20 @@ The same steps by hand, if you prefer to see each one or use your own PostgreSQL
 
 When the API cannot start because of a setup problem it prints a short list of what to fix instead of a stack trace.
 
-| Problem                                                                 | Fix                                                                                                                                                                                           |
-| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BETTER_AUTH_SECRET is not set` or `still the placeholder`              | Run `pnpm quickstart`, or set it in `.env` as in Manual setup step 2.                                                                                                                         |
-| `MAIL_ENCRYPTION_KEY is not set` or `must be exactly 64 hex characters` | Same as above. On an install that already has mail accounts, do not change an existing key.                                                                                                   |
-| `PostgreSQL is not reachable` / `Redis is not reachable`                | Start Docker Desktop, then `docker compose up -d`. Check `docker compose ps` shows the containers as healthy.                                                                                 |
-| `Docker is installed but not running`                                   | Start Docker Desktop and wait until the engine is running.                                                                                                                                    |
-| `docker compose up` fails with "port is already allocated"              | Another program uses one of 5433, 6380, 9100, 9101, 3100, 7880-7882. Stop it, or change the host port in `docker-compose.yml` and the matching URL in `.env`.                                 |
-| `Node ... is too old`                                                   | Install Node 22.12 or newer.                                                                                                                                                                  |
-| Errors after running `npm install`                                      | Delete `node_modules` and `package-lock.json`, then `pnpm install`. The repo uses pnpm workspaces only.                                                                                       |
-| Sign-in fails with the demo account                                     | The seed did not run. Run `pnpm db:seed:dev` (or `pnpm quickstart`).                                                                                                                          |
-| Docker: `additional properties 'required' not allowed` or similar       | Your Docker Compose is older than 2.24. Update Docker Desktop or the compose plugin.                                                                                                          |
-| Docker: the build stops with exit code 137 or "killed"                  | Docker ran out of memory during the web build. Give it at least 8 GB (Docker Desktop: Settings > Resources) and run the command again.                                                        |
-| Docker: `db-setup` fails with "the database already has tables"         | The database was created elsewhere without local migrations. Restore `packages/database/prisma/migrations`, or start over with `docker compose --profile app down -v` (deletes all IWM data). |
-| Docker: `port is already allocated` for 3000 or 4000                    | `pnpm dev` or another app is using the port. Stop it, then run the command again.                                                                                                             |
+| Problem                                                                 | Fix                                                                                                                                                                                               |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BETTER_AUTH_SECRET is not set` or `still the placeholder`              | Run `pnpm quickstart`, or set it in `.env` as in Manual setup step 2.                                                                                                                             |
+| `MAIL_ENCRYPTION_KEY is not set` or `must be exactly 64 hex characters` | Same as above. On an install that already has mail accounts, do not change an existing key.                                                                                                       |
+| `PostgreSQL is not reachable` / `Redis is not reachable`                | Start Docker Desktop, then `docker compose up -d`. Check `docker compose ps` shows the containers as healthy.                                                                                     |
+| `Docker is installed but not running`                                   | Start Docker Desktop and wait until the engine is running.                                                                                                                                        |
+| `docker compose up` fails with "port is already allocated"              | Another program uses one of 5433, 6380, 9100, 9101, 3100, 7880-7882. Stop it, or change the host port in `docker-compose.yml` and the matching URL in `.env`.                                     |
+| `Node ... is too old`                                                   | Install Node 22.12 or newer.                                                                                                                                                                      |
+| Errors after running `npm install`                                      | Delete `node_modules` and `package-lock.json`, then `pnpm install`. The repo uses pnpm workspaces only.                                                                                           |
+| Sign-in fails with the demo account                                     | The seed did not run. Run `pnpm db:seed:dev` (or `pnpm quickstart`).                                                                                                                              |
+| Docker: `additional properties 'required' not allowed` or similar       | Your Docker Compose is older than 2.24. Update Docker Desktop or the compose plugin.                                                                                                              |
+| Docker: the build stops with exit code 137 or "killed"                  | Docker ran out of memory during the web build. Give it at least 8 GB (Docker Desktop: Settings > Resources) and run the command again.                                                            |
+| Setup stops with "would drop, rename or change data"                    | The database differs from `schema.prisma` in a way that is not purely additive. Nothing was changed. Review the printed SQL; see [Upgrading an existing install](#upgrading-an-existing-install). |
+| Docker: `port is already allocated` for 3000 or 4000                    | `pnpm dev` or another app is using the port. Stop it, then run the command again.                                                                                                                 |
 
 ## 5. Configuration
 
@@ -563,7 +575,8 @@ pnpm format               # prettier write (format:check to verify)
 pnpm knip                 # find unused files, exports and dependencies
 
 pnpm db:generate          # regenerate the Prisma client
-pnpm db:migrate --name x  # prisma migrate dev
+pnpm db:migrate --name x  # prisma migrate dev: new migration after changing schema.prisma
+pnpm db:migrate:deploy    # apply the shipped migrations (never prompts, never resets)
 pnpm db:push              # push schema.prisma without a migration
 pnpm db:seed:dev          # demo data (development only)
 pnpm db:studio            # Prisma Studio
@@ -574,7 +587,6 @@ pnpm clean                # remove build output
 
 This is the first public release of software that grew inside one company's deployment. Some things were defined only in that deployment and are not part of this repository yet.
 
-- **Migration history.** The repo ships `schema.prisma` but no migrations. `pnpm db:migrate --name init` creates the first migration from the schema. For a production database, review it and keep it (the migrations folder is gitignored, so back it up or remove the ignore rule in your fork), then apply with `prisma migrate deploy`. When a later version changes `schema.prisma`, `pnpm quickstart` and the Docker `db-setup` step only apply the migrations you already have, so create one for the change yourself: `pnpm db:migrate --name <change>` (it writes the migration into `packages/database/prisma/migrations` and applies it; Docker picks up the same folder on the next `up`).
 - **SQL-only database features.** Add them in a follow-up migration (`prisma migrate dev --create-only`, then edit the SQL):
   - triggers that protect the root organization and keep `SUPER_ADMIN` users inside it (the API enforces both rules too),
   - the partial unique index that allows one running timer per user,

@@ -155,12 +155,13 @@ services:
     container_name: botss-db-setup
     restart: 'no'
     command: ['node', '/repo/docker/db-setup.mjs']
-    # Writes the init migration into the mounted host folder.
+    # Moves migrations left by older installs into the mounted host folder's
+    # migrations-backup/ (see "Upgrading an existing install" in the README).
     user: root
     environment:
       DATABASE_URL: postgresql://botss:botss@postgres:5432/botss?schema=public
     volumes:
-      # Shares the gitignored migrations folder with `pnpm quickstart`.
+      # Shares the migrations folder (and any local ones) with `pnpm quickstart`.
       - ./packages/database/prisma:/repo/packages/database/prisma
     depends_on:
       postgres:
