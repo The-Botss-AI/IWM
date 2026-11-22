@@ -10,8 +10,11 @@ import {
   type UpdateTaskFormInput,
 } from '@botss/shared-types';
 
+import type { AppAbility } from '@botss/auth';
+
 import { CurrentUser, type AuthedUser } from '../common/decorators/current-user.decorator';
 import { Public } from '../common/decorators/public.decorator';
+import { RequestAbility } from '../common/decorators/request-ability.decorator';
 import { RequireAbility } from '../common/decorators/required-ability.decorator';
 import { RequestUserScope, type UserScope } from '../common/decorators/user-scope.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
@@ -36,11 +39,12 @@ export class TaskFormsController {
   @RequireAbility('update', 'Project')
   create(
     @RequestUserScope() scope: UserScope,
+    @RequestAbility() ability: AppAbility,
     @CurrentUser() user: AuthedUser,
     @Param('projectId', new ZodValidationPipe(cuid)) projectId: string,
     @Body(new ZodValidationPipe(createTaskFormSchema)) input: CreateTaskFormInput,
   ) {
-    return this.forms.create(scope, user.id, projectId, input);
+    return this.forms.create(scope, ability, user.id, projectId, input);
   }
 
   @Get('forms/:id')
@@ -53,19 +57,21 @@ export class TaskFormsController {
   @RequireAbility('update', 'Project')
   update(
     @RequestUserScope() scope: UserScope,
+    @RequestAbility() ability: AppAbility,
     @Param('id', new ZodValidationPipe(cuid)) id: string,
     @Body(new ZodValidationPipe(updateTaskFormSchema)) input: UpdateTaskFormInput,
   ) {
-    return this.forms.update(scope, id, input);
+    return this.forms.update(scope, ability, id, input);
   }
 
   @Delete('forms/:id')
   @RequireAbility('update', 'Project')
   async remove(
     @RequestUserScope() scope: UserScope,
+    @RequestAbility() ability: AppAbility,
     @Param('id', new ZodValidationPipe(cuid)) id: string,
   ) {
-    await this.forms.remove(scope, id);
+    await this.forms.remove(scope, ability, id);
     return { ok: true };
   }
 

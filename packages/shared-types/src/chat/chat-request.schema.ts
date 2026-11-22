@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { cuid } from '../common/id.js';
 import { userSummarySchema } from '../user.js';
+import { isReservedChatContent, RESERVED_CHAT_CONTENT_MESSAGE } from './chat.schema.js';
 
 /**
  * Cross-organization chat requests. Someone types an email address and a
@@ -26,7 +27,13 @@ export type ChatRequestStatus = z.infer<typeof chatRequestStatus>;
 
 export const createChatRequestSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
-  message: z.string().trim().min(1).max(CHAT_REQUEST_MESSAGE_MAX),
+  // Accepting a request posts this text as the DM's first message.
+  message: z
+    .string()
+    .trim()
+    .min(1)
+    .max(CHAT_REQUEST_MESSAGE_MAX)
+    .refine((m) => !isReservedChatContent(m), RESERVED_CHAT_CONTENT_MESSAGE),
 });
 export type CreateChatRequestInput = z.infer<typeof createChatRequestSchema>;
 

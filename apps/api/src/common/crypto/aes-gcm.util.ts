@@ -18,6 +18,7 @@ import {
 
 const ALGO = 'aes-256-gcm';
 const IV_BYTES = 12; // GCM-recommended 96-bit IV
+const TAG_BYTES = 16; // full 128-bit GCM tag, what encrypt() writes
 const KEY_BYTES = 32; // AES-256
 
 let cachedKey: Buffer | null = null;
@@ -76,8 +77,13 @@ export function decrypt(token: string): string {
   if (iv.length !== IV_BYTES) {
     throw new Error('Malformed ciphertext: bad IV length.');
   }
+  // GCM accepts tags as short as 4 bytes unless told otherwise, and a short
+  // tag is far easier to forge. encrypt() always writes 16; insist on it.
+  if (tag.length !== TAG_BYTES) {
+    throw new Error('Malformed ciphertext: bad auth tag length.');
+  }
   const key = loadKey();
-  const decipher = createDecipheriv(ALGO, key, iv) as DecipherGCM;
+  const decipher = createDecipheriv(ALGO, key, iv, { authTagLength: TAG_BYTES }) as DecipherGCM;
   decipher.setAuthTag(tag);
   const plain = Buffer.concat([decipher.update(cipherBuf), decipher.final()]);
   return plain.toString('utf8');

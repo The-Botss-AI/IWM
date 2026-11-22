@@ -12,6 +12,7 @@ import {
   Req,
 } from '@nestjs/common';
 import {
+  cuid,
   createRoleSchema,
   listRolesResponseSchema,
   permissionCatalogResponseSchema,
@@ -31,6 +32,7 @@ import {
 
 import type { RequestExtensions } from '../common/guards/auth.guard';
 import { requestPermissions } from '../common/permissions/effective-permissions';
+import { SkipPermissions } from '../common/decorators/skip-permissions.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { RolesService, type RolesActor } from './roles.service';
 
@@ -39,6 +41,7 @@ import { RolesService, type RolesActor } from './roles.service';
  * `roles.manage` (company) or `members.manage` (active workspace) itself,
  * because the guardrails depend on WHICH permissions are being handed out.
  */
+@SkipPermissions()
 @Controller('roles')
 export class RolesController {
   constructor(private readonly roles: RolesService) {}
@@ -64,7 +67,7 @@ export class RolesController {
   @Patch(':id')
   async update(
     @Req() req: RequestExtensions,
-    @Param('id') id: string,
+    @Param('id', new ZodValidationPipe(cuid)) id: string,
     @Body(new ZodValidationPipe(updateRoleSchema)) input: UpdateRoleInput,
   ) {
     return roleSchema.parse(await this.roles.update(actorOf(req), id, input));
@@ -72,7 +75,10 @@ export class RolesController {
 
   @Delete(':id')
   @HttpCode(200)
-  async remove(@Req() req: RequestExtensions, @Param('id') id: string) {
+  async remove(
+    @Req() req: RequestExtensions,
+    @Param('id', new ZodValidationPipe(cuid)) id: string,
+  ) {
     await this.roles.remove(actorOf(req), id);
     return rolesOkResponseSchema.parse({ ok: true });
   }
@@ -80,7 +86,7 @@ export class RolesController {
   @Get('users/:userId')
   async userPermissions(
     @Req() req: RequestExtensions,
-    @Param('userId') userId: string,
+    @Param('userId', new ZodValidationPipe(cuid)) userId: string,
     @Query(new ZodValidationPipe(userPermissionsQuerySchema)) query: UserPermissionsQuery,
   ) {
     return userPermissionsResponseSchema.parse(
@@ -91,7 +97,7 @@ export class RolesController {
   @Put('users/:userId/company-role')
   async setCompanyRole(
     @Req() req: RequestExtensions,
-    @Param('userId') userId: string,
+    @Param('userId', new ZodValidationPipe(cuid)) userId: string,
     @Body(new ZodValidationPipe(setCompanyRoleSchema)) input: SetCompanyRoleInput,
   ) {
     return userPermissionsResponseSchema.parse(
@@ -102,7 +108,7 @@ export class RolesController {
   @Put('users/:userId/overrides')
   async setOverrides(
     @Req() req: RequestExtensions,
-    @Param('userId') userId: string,
+    @Param('userId', new ZodValidationPipe(cuid)) userId: string,
     @Body(new ZodValidationPipe(setPermissionOverridesSchema)) input: SetPermissionOverridesInput,
   ) {
     return userPermissionsResponseSchema.parse(

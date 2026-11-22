@@ -18,6 +18,7 @@ import type {
 import {
   accessCodeMatches,
   attemptsExhausted,
+  linkTokenLookupValues,
   MAX_ACCESS_CODE_ATTEMPTS,
 } from '../common/access-code';
 import { agencyBranding } from '../portal/agency';
@@ -382,10 +383,21 @@ export class InvitationsService {
   /** Exact match on the 32-byte link token; the route already refused any
    *  other shape (`invitationToken`), so a 6-digit value never gets here. */
   private async liveToken(token: string): Promise<TokenRow> {
-    const tokenRow = await this.prisma.client.verificationToken.findFirst({
-      where: { value: token },
-      select: { id: true, identifier: true, expiresAt: true, codeHash: true, codeAttempts: true },
-    });
+    // Tokens are stored hashed (see `storedLinkTokenValue`); anything that
+    // cannot be a link token is refused before any query.
+    const values = linkTokenLookupValues(token);
+    const tokenRow = values
+      ? await this.prisma.client.verificationToken.findFirst({
+          where: { value: { in: values } },
+          select: {
+            id: true,
+            identifier: true,
+            expiresAt: true,
+            codeHash: true,
+            codeAttempts: true,
+          },
+        })
+      : null;
     if (!tokenRow) {
       throw new NotFoundException({ title: 'Invitation not found', status: 404 });
     }

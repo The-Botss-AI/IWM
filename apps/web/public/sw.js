@@ -102,8 +102,9 @@ self.addEventListener('message', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const notificationData = event.notification.data || {};
-  const targetUrl = notificationData.url || '/';
-  const absoluteUrl = new URL(targetUrl, self.location.origin).href;
+  // Always this app's own origin: a payload URL for another site falls back
+  // to the app root (see sameOriginUrl).
+  const absoluteUrl = sameOriginUrl(notificationData.url);
   const isDecline = event.action === 'decline' && !!notificationData.callId;
   const isJoin = event.action === 'join' && notificationData.type === 'meeting-reminder';
   const isSnooze =
@@ -210,6 +211,21 @@ self.addEventListener('notificationclick', (event) => {
     })(),
   );
 });
+
+/**
+ * The page a banner opens, always on this app's own origin. A payload URL for
+ * another site (or a `javascript:` / `data:` one) falls back to the app root,
+ * so a notification can never send the user somewhere else.
+ */
+function sameOriginUrl(raw) {
+  try {
+    const url = new URL(typeof raw === 'string' && raw ? raw : '/', self.location.origin);
+    if (url.origin === self.location.origin) return url.href;
+  } catch (_err) {
+    /* malformed: fall through */
+  }
+  return new URL('/', self.location.origin).href;
+}
 
 /** Defensive JSON parser - push services may strip or corrupt payloads. */
 function parsePushPayload(event) {

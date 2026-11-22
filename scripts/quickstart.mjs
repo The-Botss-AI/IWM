@@ -16,7 +16,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -118,7 +118,17 @@ function copyIfMissing(example, target) {
     return;
   }
   copyFileSync(example, target);
+  keepPrivate(target);
   ok(`Created ${label}`);
+}
+
+/**
+ * The env files hold the session and mail encryption secrets: on macOS and
+ * Linux make them readable by their owner only (a copied file keeps the
+ * example's world-readable mode). Windows ACLs are left to the user profile.
+ */
+function keepPrivate(path) {
+  if (!isWindows) chmodSync(path, 0o600);
 }
 
 function prepareEnvFiles() {
@@ -153,7 +163,10 @@ function prepareEnvFiles() {
     ok('MAIL_ENCRYPTION_KEY already set');
   }
 
-  if (env !== original) writeFileSync(envPath, env);
+  if (env !== original) {
+    writeFileSync(envPath, env);
+    keepPrivate(envPath);
+  }
 }
 
 // ─── 3. Docker services ─────────────────────────────────────────────────────

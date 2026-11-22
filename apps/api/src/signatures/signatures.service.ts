@@ -53,7 +53,7 @@ import {
 import { requireVisibleClient } from '../clients/client-visibility';
 import type { SalesActor } from '../common/decorators/sales-actor.decorator';
 import { decodeSignaturePng } from './signature-image';
-import { signatureVisibleWhere } from './signature-visibility';
+import { mayReadSourceDocument, signatureVisibleWhere } from './signature-visibility';
 import { MAX_SOURCE_PDF_BYTES, SignaturePdfService } from './signature-pdf.service';
 import { SEAL_JOB_OPTIONS, sealJobId, type SealJobData, SIGNATURES_QUEUE } from './signature.queue';
 import {
@@ -1201,7 +1201,15 @@ export class SignaturesService {
       },
       include: {
         ...SUMMARY_INCLUDE,
-        document: { select: { id: true, title: true, deletedAt: true } },
+        document: {
+          select: {
+            id: true,
+            title: true,
+            deletedAt: true,
+            createdById: true,
+            access: { where: { userId: actor.userId }, select: { id: true }, take: 1 },
+          },
+        },
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: page.limit + 1,
@@ -1214,8 +1222,12 @@ export class SignaturesService {
         status: effectiveStatus(r.status, r.expiresAt, r.signers),
         createdBy: r.createdBy,
         signers: r.signers,
+        // The requester always sees the request, but the document's live
+        // title only while they can still read the document
+        // (documentReadWhere): a revoked editor whose old request is listed
+        // here must not learn what the document is called now.
         document:
-          r.document && r.document.deletedAt === null
+          r.document && r.document.deletedAt === null && mayReadSourceDocument(actor, r.document)
             ? { id: r.document.id, title: r.document.title }
             : null,
       })),
@@ -1359,8 +1371,7 @@ export class SignaturesService {
 
   /** Sign and decline cap: per IP for links, per person in the portal. */
   private async limitWrites(key: string): Promise<void> {
-    const count = await this.redis.client.incr(key);
-    if (count === 1) await this.redis.client.expire(key, 3600);
+    const count = await this.redis.hitWindow(key, 3600);
     if (count > MAX_PUBLIC_WRITES_PER_HOUR) {
       throw new HttpException(
         { title: 'Too many attempts', status: 429, detail: 'Please try again in an hour.' },

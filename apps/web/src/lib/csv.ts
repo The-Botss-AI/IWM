@@ -16,9 +16,16 @@ const COLUMN_HEADERS: Record<ListColumn | 'title', string> = {
   estimate: 'Estimate (h)',
 };
 
-function escape(value: unknown): string {
+/**
+ * RFC 4180 quoting plus spreadsheet formula neutralizing: a task title such as
+ * `=HYPERLINK("https://evil.example","Open")` would otherwise run as a formula
+ * when the export is opened in Excel or Sheets. A leading apostrophe makes the
+ * cell plain text (the same rule as the API's attendance and payroll exports).
+ */
+export function escapeCsvCell(value: unknown): string {
   if (value == null) return '';
-  const str = typeof value === 'string' ? value : String(value);
+  const raw = typeof value === 'string' ? value : String(value);
+  const str = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
   if (/[",\r\n]/.test(str)) {
     return `"${str.replace(/"/g, '""')}"`;
   }
@@ -47,29 +54,29 @@ export function buildTasksCsv(
   const taskToSprint = new Map<string, string>();
   for (const s of sprints) for (const tid of s.taskIds) taskToSprint.set(tid, s.name);
 
-  const header = ordered.map((c) => escape(COLUMN_HEADERS[c])).join(',');
+  const header = ordered.map((c) => escapeCsvCell(COLUMN_HEADERS[c])).join(',');
   const rows = tasks.map((t) =>
     ordered
       .map((c) => {
         switch (c) {
           case 'title':
-            return escape(t.title);
+            return escapeCsvCell(t.title);
           case 'status':
-            return escape(statusLabel(t.status));
+            return escapeCsvCell(statusLabel(t.status));
           case 'priority':
-            return escape(priorityLabel(t.priority));
+            return escapeCsvCell(priorityLabel(t.priority));
           case 'assignee':
-            return escape(t.assignee?.name ?? t.assignee?.email ?? '');
+            return escapeCsvCell(t.assignee?.name ?? t.assignee?.email ?? '');
           case 'due':
-            return escape(isoOrEmpty(t.dueDate));
+            return escapeCsvCell(isoOrEmpty(t.dueDate));
           case 'updated':
-            return escape(isoOrEmpty(t.updatedAt));
+            return escapeCsvCell(isoOrEmpty(t.updatedAt));
           case 'description':
-            return escape(t.description ?? '');
+            return escapeCsvCell(t.description ?? '');
           case 'sprint':
-            return escape(taskToSprint.get(t.id) ?? '');
+            return escapeCsvCell(taskToSprint.get(t.id) ?? '');
           case 'estimate':
-            return escape(t.estimateHours ?? '');
+            return escapeCsvCell(t.estimateHours ?? '');
           default:
             return '';
         }

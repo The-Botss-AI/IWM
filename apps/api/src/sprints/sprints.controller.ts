@@ -12,7 +12,10 @@ import {
   type UpdateSprintInput,
 } from '@botss/shared-types';
 
+import type { AppAbility } from '@botss/auth';
+
 import { CurrentUser, type AuthedUser } from '../common/decorators/current-user.decorator';
+import { RequestAbility } from '../common/decorators/request-ability.decorator';
 import { RequireAbility } from '../common/decorators/required-ability.decorator';
 import { RequestUserScope, type UserScope } from '../common/decorators/user-scope.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
@@ -37,29 +40,32 @@ export class SprintsController {
   @RequireAbility('update', 'Project')
   create(
     @RequestUserScope() scope: UserScope,
+    @RequestAbility() ability: AppAbility,
     @Param('projectId', new ZodValidationPipe(cuid)) projectId: string,
     @Body(new ZodValidationPipe(createSprintSchema)) input: CreateSprintInput,
   ) {
-    return this.sprints.create(scope, projectId, input);
+    return this.sprints.create(scope, ability, projectId, input);
   }
 
   @Patch('sprints/:id')
   @RequireAbility('update', 'Project')
   update(
     @RequestUserScope() scope: UserScope,
+    @RequestAbility() ability: AppAbility,
     @Param('id', new ZodValidationPipe(cuid)) id: string,
     @Body(new ZodValidationPipe(updateSprintSchema)) input: UpdateSprintInput,
   ) {
-    return this.sprints.update(scope, id, input);
+    return this.sprints.update(scope, ability, id, input);
   }
 
   @Delete('sprints/:id')
   @RequireAbility('update', 'Project')
   async remove(
     @RequestUserScope() scope: UserScope,
+    @RequestAbility() ability: AppAbility,
     @Param('id', new ZodValidationPipe(cuid)) id: string,
   ) {
-    await this.sprints.remove(scope, id);
+    await this.sprints.remove(scope, ability, id);
     return { ok: true };
   }
 
@@ -67,29 +73,32 @@ export class SprintsController {
   @RequireAbility('update', 'Project')
   start(
     @RequestUserScope() scope: UserScope,
+    @RequestAbility() ability: AppAbility,
     @Param('id', new ZodValidationPipe(cuid)) id: string,
   ) {
-    return this.sprints.start(scope, id);
+    return this.sprints.start(scope, ability, id);
   }
 
   @Post('sprints/:id/complete')
   @RequireAbility('update', 'Project')
   complete(
     @RequestUserScope() scope: UserScope,
+    @RequestAbility() ability: AppAbility,
     @Param('id', new ZodValidationPipe(cuid)) id: string,
   ) {
-    return this.sprints.complete(scope, id);
+    return this.sprints.complete(scope, ability, id);
   }
 
   @Post('sprints/:id/tasks')
   @RequireAbility('update', 'Project')
   async addTask(
     @RequestUserScope() scope: UserScope,
+    @RequestAbility() ability: AppAbility,
     @CurrentUser() user: AuthedUser,
     @Param('id', new ZodValidationPipe(cuid)) id: string,
     @Body(new ZodValidationPipe(addTaskSchema)) input: { taskId: string },
   ) {
-    await this.sprints.addTask(scope, user.id, id, input.taskId);
+    await this.sprints.addTask(scope, ability, user.id, id, input.taskId);
     return { ok: true };
   }
 
@@ -97,10 +106,11 @@ export class SprintsController {
   @RequireAbility('update', 'Project')
   async removeTask(
     @RequestUserScope() scope: UserScope,
+    @RequestAbility() ability: AppAbility,
     @Param('id', new ZodValidationPipe(cuid)) id: string,
     @Param('taskId', new ZodValidationPipe(cuid)) taskId: string,
   ) {
-    await this.sprints.removeTask(scope, id, taskId);
+    await this.sprints.removeTask(scope, ability, id, taskId);
     return { ok: true };
   }
 
@@ -108,10 +118,11 @@ export class SprintsController {
   @RequireAbility('update', 'Project')
   async reorderTask(
     @RequestUserScope() scope: UserScope,
+    @RequestAbility() ability: AppAbility,
     @Param('id', new ZodValidationPipe(cuid)) id: string,
     @Body(new ZodValidationPipe(reorderSprintTaskSchema)) input: ReorderSprintTaskInput,
   ) {
-    await this.sprints.reorderTask(scope, id, input);
+    await this.sprints.reorderTask(scope, ability, id, input);
     return { ok: true };
   }
 
@@ -119,9 +130,10 @@ export class SprintsController {
   @RequireAbility('update', 'Project')
   async moveTask(
     @RequestUserScope() scope: UserScope,
+    @RequestAbility() ability: AppAbility,
     @Body(new ZodValidationPipe(moveSprintTaskSchema)) input: MoveSprintTaskInput,
   ) {
-    await this.sprints.moveTask(scope, input);
+    await this.sprints.moveTask(scope, ability, input);
     return { ok: true };
   }
 }

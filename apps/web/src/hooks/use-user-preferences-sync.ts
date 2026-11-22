@@ -30,6 +30,8 @@ import {
   getChatNotificationsOwner,
   replaceDoNotDisturb,
 } from '@/lib/chat-prefs';
+import { clearRecent } from '@/lib/command-palette-recents';
+import { claimInAppNotificationsFor } from '@/lib/in-app-notifications';
 import { sessionQueryOptions } from '@/lib/session-query';
 import { toastError } from '@/lib/toast';
 import {
@@ -149,13 +151,15 @@ export function useUserPreferencesSync(): void {
   const failures = useRef(0);
   const dndUploaded = useRef(false);
 
-  // Bind the device cache to this user before anything is reconciled.
+  // Bind the device cache to this user before anything is reconciled. A
+  // different person signing in also loses the previous one's notification
+  // previews and recent palette titles.
   useEffect(() => {
     dndUploaded.current = false;
-    if (userId) {
-      claimAppearanceFor(userId);
-      claimChatNotificationsFor(userId);
-    }
+    if (!userId) return;
+    claimAppearanceFor(userId);
+    claimChatNotificationsFor(userId);
+    if (claimInAppNotificationsFor(userId)) clearRecent();
   }, [userId]);
 
   // Collect user-initiated edits and save them.

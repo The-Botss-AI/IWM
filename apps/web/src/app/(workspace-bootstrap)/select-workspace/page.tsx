@@ -15,6 +15,7 @@ import { PageLoader } from '@/components/ui/loader';
 import { WORKSPACE_MESSAGES } from '@/lib/loading-messages';
 import { QueryError } from '@/components/ui/query-error';
 import { getApi } from '@/lib/api';
+import { unsubscribeWebPush } from '@/hooks/use-desktop-notifications';
 import { unregisterNativePush } from '@/hooks/use-native-push';
 import { useWorkspaces } from '@/hooks/use-workspace';
 import { clearAppAppearance } from '@/lib/app-prefs';
@@ -68,6 +69,7 @@ export default function SelectWorkspacePage() {
     // A plain link to /sign-in used to sit here labelled "Sign out", which
     // left the session alive; the next visit signed the user straight back in.
     await unregisterNativePush().catch(() => undefined);
+    await unsubscribeWebPush();
     await authClient.signOut().catch(() => undefined);
     qc.clear();
     clearAllInAppNotifications();

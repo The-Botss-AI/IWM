@@ -1,5 +1,6 @@
 import {
   type EffectivePermissions,
+  isFullWorkspaceAdmin,
   presetPermissions,
   SUPPORT_SESSION_PERMISSIONS,
   resolveCompanyPermissions,
@@ -115,6 +116,40 @@ export function requestPermissions(req: RequestExtensions): EffectivePermissions
       .filter((m) => active !== null && m.workspaceId === active)
       .map((m) => ({ role: m.role as WorkspaceRole })),
   });
+}
+
+/**
+ * The role name to use for the "workspace owner / admin" checks that read a
+ * role (documents, signatures, the client hub, search, comments, portal
+ * decisions). A custom role leaves the base role underneath it unchanged -
+ * the UI keeps the current one when a custom role is assigned - so an admin
+ * moved to a narrower custom role, or denied permissions by an override,
+ * still carried role ADMIN and kept admin-only access. OWNER / ADMIN now
+ * counts only while the person holds every workspace permission, the same
+ * test CASL uses for `manage all`; otherwise they count as MEMBER.
+ */
+export function adminCheckedRole<R extends string | null | undefined>(
+  role: R,
+  eff: EffectivePermissions,
+): R | 'MEMBER' {
+  if ((role === 'OWNER' || role === 'ADMIN') && !isFullWorkspaceAdmin(eff)) return 'MEMBER';
+  return role;
+}
+
+/**
+ * {@link adminCheckedRole} for the request user in `workspaceId`. The
+ * request's permissions describe the ACTIVE workspace only, so an
+ * owner / admin role in any other workspace counts as MEMBER here.
+ */
+export function requestRoleForAdminChecks(
+  req: RequestExtensions,
+  workspaceId: string,
+): string | undefined {
+  const role = (req.workspaceMemberships ?? []).find((m) => m.workspaceId === workspaceId)?.role;
+  if (workspaceId !== req.workspaceId) {
+    return role === 'OWNER' || role === 'ADMIN' ? 'MEMBER' : role;
+  }
+  return adminCheckedRole(role, requestPermissions(req));
 }
 
 /** Company permission check for a user id (services without the request). */

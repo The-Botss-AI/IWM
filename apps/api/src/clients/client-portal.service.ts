@@ -18,6 +18,7 @@ import {
 } from '@botss/shared-types';
 
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { storedLinkTokenValue } from '../common/access-code';
 import type { SalesActor } from '../common/decorators/sales-actor.decorator';
 import { EmailService } from '../email/email.service';
 import { agencyBranding } from '../portal/agency';
@@ -538,7 +539,10 @@ export class ClientPortalService {
     const expiresAt = new Date(Date.now() + PORTAL_TOKEN_TTL_MS[kind]);
     await this.prisma.client.$transaction([
       this.prisma.client.verificationToken.deleteMany({ where: { identifier } }),
-      this.prisma.client.verificationToken.create({ data: { identifier, value, expiresAt } }),
+      // Stored hashed; only the emailed / copied link carries the raw value.
+      this.prisma.client.verificationToken.create({
+        data: { identifier, value: storedLinkTokenValue(value), expiresAt },
+      }),
     ]);
     return { link: portalTokenUrl(appUrl, value), expiresAt };
   }

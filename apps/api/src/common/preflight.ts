@@ -11,6 +11,9 @@ import { Socket } from 'node:net';
 /** The placeholder shipped in .env.example. A real install must replace it. */
 export const BETTER_AUTH_SECRET_PLACEHOLDER = 'replace-me-with-32-byte-hex-secret';
 
+/** 32 characters: the floor for a random secret; `openssl rand -hex 32` gives 64. */
+export const BETTER_AUTH_SECRET_MIN_PRODUCTION_LENGTH = 32;
+
 const SETUP_HINT =
   'Run `pnpm quickstart` from the repository root to create .env and fill in secrets.';
 
@@ -37,6 +40,16 @@ export function findEnvProblems(env: NodeJS.ProcessEnv): string[] {
     problems.push(`BETTER_AUTH_SECRET is not set. ${SETUP_HINT}`);
   } else if (authSecret === BETTER_AUTH_SECRET_PLACEHOLDER) {
     problems.push(`BETTER_AUTH_SECRET is still the placeholder from .env.example. ${SETUP_HINT}`);
+  } else if (
+    env.NODE_ENV === 'production' &&
+    authSecret.length < BETTER_AUTH_SECRET_MIN_PRODUCTION_LENGTH
+  ) {
+    // It signs every session cookie: a short or memorable value can be guessed
+    // offline from one captured cookie. Development keeps any value.
+    problems.push(
+      `BETTER_AUTH_SECRET is too short for production (at least ${BETTER_AUTH_SECRET_MIN_PRODUCTION_LENGTH} characters). ` +
+        'Generate one with `openssl rand -hex 32`.',
+    );
   }
 
   const mailKey = env.MAIL_ENCRYPTION_KEY?.trim();

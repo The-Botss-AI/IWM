@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import {
   type AppAbility,
   type AppSubject,
@@ -74,4 +75,21 @@ export function abilityRow<T extends object>(type: AppSubject, row: T): AppSubje
   // CASL's typed `can()` only accepts subject names; an instance tagged with
   // `__type` is what the factory's detectSubjectType resolves at runtime.
   return { ...row, __type: type } as unknown as AppSubject;
+}
+
+/**
+ * Row-level `update Project`: settings, archive/restore, sprints and task
+ * forms of ONE project. The route guard only saw the bare subject, which a
+ * PROJECT_LEAD of any single project passes (`manage Project { id }`), so a
+ * lead of one project could change every project they could see.
+ */
+export function assertCanUpdateProject(ability: AppAbility, projectId: string): void {
+  if (!ability.can('update', abilityRow('Project', { id: projectId }))) {
+    throw new ForbiddenException({
+      title: 'Forbidden',
+      status: 403,
+      detail: 'Only a lead of this project, or someone allowed to edit projects, can change it.',
+      code: 'insufficient_permissions',
+    });
+  }
 }

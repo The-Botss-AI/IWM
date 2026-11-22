@@ -13,7 +13,7 @@ import type {
 import type { AppAbility } from '@botss/auth';
 
 import type { UserScope } from '../common/decorators/user-scope.decorator';
-import { abilityRow } from '../common/permissions/request-ability';
+import { abilityRow, assertCanUpdateProject } from '../common/permissions/request-ability';
 import { projectAccessWhere } from '../common/project-access';
 import { PrismaService } from '../prisma/prisma.service';
 import { WorkspacesService } from '../workspaces/workspaces.service';
@@ -174,8 +174,9 @@ export class ProjectsService {
     });
   }
 
-  async update(scope: UserScope, id: string, input: UpdateProjectInput) {
+  async update(scope: UserScope, ability: AppAbility, id: string, input: UpdateProjectInput) {
     const current = await this.get(scope, id);
+    assertCanUpdateProject(ability, current.id);
     if (input.clientId) await this.assertClientInWorkspace(current.workspaceId, input.clientId);
     // Linking a project to a (different) client puts it in that client's
     // portal. Deciding what a client sees belongs to workspace owners and
@@ -243,16 +244,18 @@ export class ProjectsService {
     await this.prisma.client.project.delete({ where: { id } });
   }
 
-  async archive(scope: UserScope, id: string) {
-    await this.get(scope, id);
+  async archive(scope: UserScope, ability: AppAbility, id: string) {
+    const project = await this.get(scope, id);
+    assertCanUpdateProject(ability, project.id);
     return this.prisma.client.project.update({
       where: { id },
       data: { status: 'ARCHIVED' },
     });
   }
 
-  async restore(scope: UserScope, id: string) {
-    await this.get(scope, id);
+  async restore(scope: UserScope, ability: AppAbility, id: string) {
+    const project = await this.get(scope, id);
+    assertCanUpdateProject(ability, project.id);
     return this.prisma.client.project.update({
       where: { id },
       data: { status: 'ACTIVE' },

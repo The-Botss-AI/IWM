@@ -57,15 +57,16 @@ interface Props {
  * Determine whether the viewer is an admin on this room.
  *
  * Legacy fallback: if no participant in the room has the ADMIN role
- * (older rooms predating the role column), treat everyone as admin so
- * existing groups remain manageable until someone is explicitly promoted.
+ * (older rooms predating the role column), treat every participant as admin
+ * so existing groups remain manageable until someone is explicitly promoted.
+ * Only participants, as on the server (`assertRoomAdmin`): someone viewing an
+ * open channel without a participant row never gets its admin tools.
  */
 function useIsRoomAdmin(room: ChatRoomSummary, userId: string): boolean {
   return useMemo(() => {
     const adminCount = room.participants.filter((p) => p.role === 'ADMIN').length;
-    if (adminCount === 0) return true;
     const me = room.participants.find((p) => p.userId === userId);
-    return me?.role === 'ADMIN';
+    return adminCount === 0 ? !!me : me?.role === 'ADMIN';
   }, [room.participants, userId]);
 }
 

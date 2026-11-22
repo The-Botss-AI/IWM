@@ -16,8 +16,10 @@ import type {
   TaskFormField,
   UpdateTaskFormInput,
 } from '@botss/shared-types';
+import type { AppAbility } from '@botss/auth';
 
 import type { UserScope } from '../common/decorators/user-scope.decorator';
+import { assertCanUpdateProject } from '../common/permissions/request-ability';
 import { projectAccessWhere } from '../common/project-access';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
@@ -99,8 +101,15 @@ export class TaskFormsService {
     return form;
   }
 
-  async create(scope: UserScope, userId: string, projectId: string, input: CreateTaskFormInput) {
+  async create(
+    scope: UserScope,
+    ability: AppAbility,
+    userId: string,
+    projectId: string,
+    input: CreateTaskFormInput,
+  ) {
     await this.assertProjectAccess(scope, projectId);
+    assertCanUpdateProject(ability, projectId);
     if (input.defaultAssigneeId) {
       await this.assertAssigneeInOrg(projectId, input.defaultAssigneeId);
     }
@@ -120,8 +129,9 @@ export class TaskFormsService {
     });
   }
 
-  async update(scope: UserScope, formId: string, input: UpdateTaskFormInput) {
+  async update(scope: UserScope, ability: AppAbility, formId: string, input: UpdateTaskFormInput) {
     const form = await this.get(scope, formId);
+    assertCanUpdateProject(ability, form.projectId);
     if (input.defaultAssigneeId) {
       await this.assertAssigneeInOrg(form.projectId, input.defaultAssigneeId);
     }
@@ -136,8 +146,9 @@ export class TaskFormsService {
     return this.prisma.client.taskForm.update({ where: { id: formId }, data });
   }
 
-  async remove(scope: UserScope, formId: string) {
-    await this.get(scope, formId);
+  async remove(scope: UserScope, ability: AppAbility, formId: string) {
+    const form = await this.get(scope, formId);
+    assertCanUpdateProject(ability, form.projectId);
     // Soft delete. The schema carries `deletedAt` for this model but it is not
     // in the soft-delete extension, so `.delete()` was a real hard delete that
     // cascaded away every submission. Also retire the public slug so the
@@ -162,9 +173,10 @@ export class TaskFormsService {
   async publicGet(slug: string): Promise<PublicTaskForm> {
     const form = await this.prisma.client.taskForm.findUnique({
       where: { publicSlug: slug },
-      include: { project: { select: { name: true, key: true } } },
+      include: { project: { select: { name: true, key: true, deletedAt: true } } },
     });
-    if (!form || !form.isPublic || form.deletedAt) {
+    // A form on a deleted project is gone too.
+    if (!form || !form.isPublic || form.deletedAt || form.project.deletedAt) {
       throw new NotFoundException({ title: 'Form not found', status: 404 });
     }
     return {
@@ -189,17 +201,15 @@ export class TaskFormsService {
   }) {
     const form = await this.prisma.client.taskForm.findUnique({
       where: { publicSlug: args.slug },
+      include: { project: { select: { deletedAt: true } } },
     });
-    if (!form || !form.isPublic || form.deletedAt) {
+    // On a deleted project the form must stop creating tasks.
+    if (!form || !form.isPublic || form.deletedAt || form.project.deletedAt) {
       throw new NotFoundException({ title: 'Form not found', status: 404 });
     }
 
-    // Rate limit: 10 / hour / IP. INCR with EXPIRE on first set.
-    const key = `taskform:rate:${args.ip}`;
-    const count = await this.redis.client.incr(key);
-    if (count === 1) {
-      await this.redis.client.expire(key, 3600);
-    }
+    // Rate limit: 10 / hour / IP.
+    const count = await this.redis.hitWindow(`taskform:rate:${args.ip}`, 3600);
     if (count > 10) {
       throw new HttpException(
         {

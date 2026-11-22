@@ -516,6 +516,31 @@ export type ParsedShareCard = {
   subtitle: string | null;
   link: string;
 };
+/**
+ * The server only ever builds in-app paths for share cards (`/projects/...`,
+ * `/todo#...`). Anything else - an absolute URL, a protocol-relative `//host`
+ * or a backslash path some browsers treat like one - came from a forged
+ * message, so it is dropped rather than rendered as a clickable link.
+ * Browsers delete tabs and newlines while parsing a URL (`/\t/evil.example`
+ * becomes `//evil.example`), so control characters and spaces are refused
+ * too, and the link must still resolve to the same origin. Dot segments can
+ * fold a path into `//host` (`/..//evil.example`), which is another origin as
+ * soon as it is used as a path, so that resolved shape is refused as well.
+ */
+const SHARE_LINK_BASE = 'https://app.invalid';
+
+export function shareCardHref(link: unknown): string {
+  if (typeof link !== 'string') return '#';
+  if (!/^\/(?![/\\])[^\\\u0000- \u007f]*$/.test(link)) return '#';
+  try {
+    const resolved = new URL(link, SHARE_LINK_BASE);
+    if (resolved.origin !== SHARE_LINK_BASE || resolved.pathname.startsWith('//')) return '#';
+  } catch {
+    return '#';
+  }
+  return link;
+}
+
 export function parseShareCard(content: string | null): ParsedShareCard | null {
   if (!content || !content.startsWith('__share__:')) return null;
   // Split with a hard limit so JSON payloads containing `:` survive.
@@ -547,7 +572,7 @@ export function parseShareCard(content: string | null): ParsedShareCard | null {
       itemId,
       title: typeof parsed.title === 'string' ? parsed.title : '(shared item)',
       subtitle: typeof parsed.subtitle === 'string' ? parsed.subtitle : null,
-      link: typeof parsed.link === 'string' ? parsed.link : '#',
+      link: shareCardHref(parsed.link),
     };
   } catch {
     return null;

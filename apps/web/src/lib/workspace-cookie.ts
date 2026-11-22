@@ -20,8 +20,10 @@ export function writeWorkspaceCookie(workspaceId: string): void {
   // SameSite=Lax + Path=/ so the cookie is sent with same-site XHRs (fetch to
   // the API origin during local dev shares the registrable domain). In prod we
   // rely on the same eTLD+1 between web and API; cross-origin setups would
-  // need Secure + SameSite=None which we'd toggle here.
-  const attrs = `Path=/; Max-Age=${MAX_AGE_SECONDS}; SameSite=Lax`;
+  // need SameSite=None which we'd toggle here. Over HTTPS it is Secure, so it
+  // never travels over plain HTTP.
+  const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+  const attrs = `Path=/; Max-Age=${MAX_AGE_SECONDS}; SameSite=Lax${secure}`;
   document.cookie = `${CURRENT_WORKSPACE_COOKIE}=${encodeURIComponent(workspaceId)}; ${attrs}`;
 }
 

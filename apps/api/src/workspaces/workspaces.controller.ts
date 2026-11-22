@@ -16,6 +16,7 @@ import {
 import { CurrentUser, type AuthedUser } from '../common/decorators/current-user.decorator';
 import { CurrentWorkspaceId } from '../common/decorators/current-workspace.decorator';
 import { RequireAbility } from '../common/decorators/required-ability.decorator';
+import { SkipPermissions } from '../common/decorators/skip-permissions.decorator';
 import { RequestUserScope, type UserScope } from '../common/decorators/user-scope.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { WorkspacesService } from './workspaces.service';
@@ -25,6 +26,8 @@ export class WorkspacesController {
   constructor(private readonly workspaces: WorkspacesService) {}
 
   @Get()
+  // The caller's own memberships only.
+  @SkipPermissions()
   list(
     @CurrentUser() user: AuthedUser,
     @Query(new ZodValidationPipe(listWorkspacesQuerySchema)) query: ListWorkspacesQuery,
@@ -42,6 +45,8 @@ export class WorkspacesController {
   }
 
   @Get('current')
+  // AuthGuard only ever resolves an active workspace the caller belongs to.
+  @SkipPermissions()
   current(@CurrentWorkspaceId() id: string) {
     return this.workspaces.getById(id);
   }
@@ -57,6 +62,8 @@ export class WorkspacesController {
   }
 
   @Get('current/members')
+  // AuthGuard only ever resolves an active workspace the caller belongs to.
+  @SkipPermissions()
   currentMembers(@CurrentWorkspaceId() id: string) {
     return this.workspaces.listMembers(id);
   }
@@ -126,6 +133,8 @@ export class WorkspacesController {
   /** Members of the workspace owning a given project - used by assignee
    * pickers so a cross-workspace project member can still see the team. */
   @Get('for-project/:projectId/members')
+  // Membership-scoped read; WorkspacesService checks the caller's membership.
+  @SkipPermissions()
   membersForProject(
     @RequestUserScope() scope: UserScope,
     @Param('projectId', new ZodValidationPipe(cuid)) projectId: string,
@@ -134,6 +143,8 @@ export class WorkspacesController {
   }
 
   @Get(':id')
+  // Membership-scoped read; WorkspacesService checks the caller's membership.
+  @SkipPermissions()
   get(@RequestUserScope() scope: UserScope, @Param('id', new ZodValidationPipe(cuid)) id: string) {
     return this.workspaces.getByIdScoped(scope, id);
   }

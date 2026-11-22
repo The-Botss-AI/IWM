@@ -394,11 +394,28 @@ export class LeadsService {
     // Converting mints a Client, which is a create - keep it with the same
     // people who are allowed to create clients directly.
     this.assertFullAccess(actor, 'convert');
+    // Minting a new client is a client create: the same `sales.clients.all`
+    // that ClientsService.create asks for. Without it, a lead can still be
+    // linked to a client the caller can see (their own assigned clients).
+    if (!input.clientId && !actor.fullClients) {
+      throw new ForbiddenException({
+        title: 'Forbidden',
+        status: 403,
+        detail: 'Only workspace admins and the sales team can create clients.',
+        code: 'insufficient_permissions',
+      });
+    }
     const lead = await this.get(actor, leadId);
+    if (lead.convertedToClientId) throw alreadyConverted();
     const workspaceId = actor.workspaceId;
     if (input.clientId) {
       const existing = await this.prisma.client.client.findFirst({
-        where: { id: input.clientId, workspaceId, deletedAt: null },
+        where: {
+          id: input.clientId,
+          workspaceId,
+          deletedAt: null,
+          ...(actor.fullClients ? {} : { assigneeId: actor.userId }),
+        },
         select: { id: true },
       });
       if (!existing) {
@@ -440,14 +457,28 @@ export class LeadsService {
         });
         clientId = client.id;
       }
-      return tx.lead.update({
-        where: { id: leadId },
+      // Conditional on "not converted yet": two converts racing past the
+      // check above must not both mint a client. The loser's transaction
+      // (its new client included) rolls back.
+      const claimed = await tx.lead.updateMany({
+        where: { id: leadId, convertedToClientId: null },
         data: {
           convertedToClientId: clientId,
           convertedAt: new Date(),
           stage: 'WON',
         },
       });
+      if (claimed.count !== 1) throw alreadyConverted();
+      return tx.lead.findUniqueOrThrow({ where: { id: leadId } });
     });
   }
+}
+
+function alreadyConverted(): ConflictException {
+  return new ConflictException({
+    title: 'Lead already converted',
+    status: 409,
+    detail: 'This lead is already linked to a client.',
+    code: 'lead-already-converted',
+  });
 }

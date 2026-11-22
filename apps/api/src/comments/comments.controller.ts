@@ -14,6 +14,7 @@ import { CurrentUser, type AuthedUser } from '../common/decorators/current-user.
 import { RequireAbility } from '../common/decorators/required-ability.decorator';
 import { RequestUserScope, type UserScope } from '../common/decorators/user-scope.decorator';
 import type { RequestExtensions } from '../common/guards/auth.guard';
+import { requestRoleForAdminChecks } from '../common/permissions/effective-permissions';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { CommentsService } from './comments.service';
 
@@ -61,7 +62,12 @@ export class CommentsController {
     @Req() req: Request & RequestExtensions,
     @Param('id', new ZodValidationPipe(cuid)) id: string,
   ) {
-    await this.comments.remove(scope, user.id, req.workspaceMemberships ?? [], id);
+    // Admin roles count only with every workspace permission (adminCheckedRole).
+    const memberships = (req.workspaceMemberships ?? []).map((m) => ({
+      workspaceId: m.workspaceId,
+      role: requestRoleForAdminChecks(req, m.workspaceId) ?? m.role,
+    }));
+    await this.comments.remove(scope, user.id, memberships, id);
     return { ok: true };
   }
 }

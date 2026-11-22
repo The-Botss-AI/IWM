@@ -103,15 +103,16 @@ export function ChatSidebar({
   /**
    * Right-click options resolve against the targeted room. Some are gated
    * by room-admin (creator or anyone explicitly promoted) or by system
-   * admin. We treat "no admin recorded" as a legacy room where everyone
-   * can manage, matching the server-side `assertRoomAdmin` fallback.
+   * admin. We treat "no admin recorded" as a legacy room where every
+   * participant can manage, matching the server-side `assertRoomAdmin`
+   * fallback (participants only, not an open channel's visitors).
    */
   const menuItems: ContextMenuItem[] = useMemo(() => {
     if (!menu) return [];
     const room = menu.room;
     const me = room.participants.find((p) => p.userId === currentUserId);
     const adminCount = room.participants.filter((p) => p.role === 'ADMIN').length;
-    const isRoomAdmin = adminCount === 0 || me?.role === 'ADMIN';
+    const isRoomAdmin = adminCount === 0 ? !!me : me?.role === 'ADMIN';
     // Never for a DM with another organization (the API refuses it too).
     const canClearForEveryone = (isRoomAdmin || systemAdmin) && !room.spansOrganizations;
     const isDM = room.type === 'DM';

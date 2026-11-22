@@ -18,6 +18,7 @@ import { CurrentUser, type AuthedUser } from '../common/decorators/current-user.
 import { CurrentWorkspaceId } from '../common/decorators/current-workspace.decorator';
 import { RequireAbility } from '../common/decorators/required-ability.decorator';
 import type { RequestExtensions } from '../common/guards/auth.guard';
+import { requestRoleForAdminChecks } from '../common/permissions/effective-permissions';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { sendPdf } from './send-pdf';
 import { type SignatureActor, SignaturesService } from './signatures.service';
@@ -27,8 +28,8 @@ function actorOf(
   workspaceId: string,
   userId: string,
 ): SignatureActor {
-  const role = (req.workspaceMemberships ?? []).find((m) => m.workspaceId === workspaceId)?.role;
-  return { userId, workspaceId, workspaceRole: role };
+  // OWNER / ADMIN only with every workspace permission (see adminCheckedRole).
+  return { userId, workspaceId, workspaceRole: requestRoleForAdminChecks(req, workspaceId) };
 }
 
 /** E-signature requests, for workspace members. Signers use the public controller. */

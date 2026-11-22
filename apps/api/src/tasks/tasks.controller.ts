@@ -106,8 +106,9 @@ export class TasksController {
   @RequireAbility('update', 'Task')
   restore(
     @RequestUserScope() scope: UserScope,
+    @RequestAbility() ability: AppAbility,
     @Param('id', new ZodValidationPipe(cuid)) id: string,
   ) {
-    return this.tasks.restore(scope, id);
+    return this.tasks.restore(scope, ability, id);
   }
 }

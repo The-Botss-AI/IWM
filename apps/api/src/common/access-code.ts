@@ -27,6 +27,29 @@ export function hashLinkToken(raw: string): string {
   return createHash('sha256').update(raw).digest('hex');
 }
 
+/**
+ * Workspace invitations and portal links live in `VerificationToken.value`.
+ * They are stored as `sha256:<hex>`, never raw, so a read of the database (a
+ * backup, a replica, a leaked dump) yields no working link.
+ */
+const STORED_LINK_TOKEN_PREFIX = 'sha256:';
+
+export function storedLinkTokenValue(raw: string): string {
+  return `${STORED_LINK_TOKEN_PREFIX}${hashLinkToken(raw)}`;
+}
+
+/**
+ * The `VerificationToken.value`s a link token may match, or null when the
+ * input cannot be a link token at all. Links issued before tokens were hashed
+ * still hold their raw value until they expire (7 days at most), so the raw
+ * value matches too. A real token is base64url (no ':'), so a stored
+ * `sha256:` value can never be replayed as a token.
+ */
+export function linkTokenLookupValues(raw: string): string[] | null {
+  if (!/^[A-Za-z0-9_-]{20,200}$/.test(raw)) return null;
+  return [storedLinkTokenValue(raw), raw];
+}
+
 /** Digits only: "842-195", "842 195" and "842195" are the same code. */
 export function normalizeAccessCode(raw: string): string {
   return raw.trim().replace(/[-\s]/g, '');

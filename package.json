@@ -50,6 +50,8 @@
   "pnpm": {
     "overrides": {
       "zod@<4": "3.24.1",
+      "react@>=19.0.0": "19.2.9",
+      "react-dom@>=19.0.0": "19.2.9",
       "better-auth": "1.7.16",
       "fast-xml-parser": "^5.12.0",
       "multer": "^2.5.0",

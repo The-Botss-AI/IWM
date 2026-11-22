@@ -12,7 +12,10 @@ import type {
   TodoWithRefs,
   UpdateTodoInput,
 } from '@botss/shared-types';
+import { isFullWorkspaceAdmin } from '@botss/auth';
 
+import { loadEffectivePermissions } from '../common/permissions/effective-permissions';
+import { canSeeProject } from '../common/project-access';
 import { WorkspaceScopeService } from '../common/scope/workspace-scope.service';
 import { orgWorkspaceMembership } from '../common/tenant-scope';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -149,6 +152,44 @@ export class TodosService {
   }
 
   /**
+   * A to-do may only point at a project its author can see: the rule of
+   * `canSeeProject` (project-access.ts), applied in the to-do's own workspace,
+   * which need not be the active one. Without it a to-do could attach to a
+   * PRIVATE project by id and echo its name and colour back. A hidden project
+   * gets the same answer as a missing one.
+   */
+  private async assertProjectVisible(
+    userId: string,
+    projectId: string,
+    workspaceId: string,
+    notFoundTitle: string,
+  ): Promise<void> {
+    const project = await this.prisma.client.project.findFirst({
+      where: { id: projectId, workspaceId, deletedAt: null },
+      select: {
+        id: true,
+        visibility: true,
+        createdById: true,
+        memberships: { where: { userId }, select: { projectId: true }, take: 1 },
+      },
+    });
+    if (project) {
+      const viewer = {
+        userId,
+        projectIds: project.memberships.map((m) => m.projectId),
+        seesEveryProject: false,
+      };
+      if (canSeeProject(viewer, project)) return;
+      // Only a PRIVATE project gets here, so the permission load is rare.
+      const effective = await loadEffectivePermissions(userId, workspaceId);
+      viewer.seesEveryProject =
+        effective.company.includes('workspaces.admin_all') || isFullWorkspaceAdmin(effective);
+      if (canSeeProject(viewer, project)) return;
+    }
+    throw new BadRequestException({ title: notFoundTitle, status: 400 });
+  }
+
+  /**
    * Create a todo. Defaults to the active workspace + the creator as
    * the implicit assignee. Optional `workspaceId` lets a user create a
    * todo in any workspace they belong to in their org; optional
@@ -163,20 +204,12 @@ export class TodosService {
     await this.assertWorkspaceAccess(userId, targetWorkspaceId);
 
     if (input.projectId) {
-      const proj = await this.prisma.client.project.findFirst({
-        where: {
-          id: input.projectId,
-          workspaceId: targetWorkspaceId,
-          deletedAt: null,
-        },
-        select: { id: true },
-      });
-      if (!proj) {
-        throw new BadRequestException({
-          title: 'Project not in target workspace',
-          status: 400,
-        });
-      }
+      await this.assertProjectVisible(
+        userId,
+        input.projectId,
+        targetWorkspaceId,
+        'Project not in target workspace',
+      );
     }
 
     if (input.assigneeId && input.assigneeId !== userId) {
@@ -267,20 +300,12 @@ export class TodosService {
     }
 
     if (input.projectId !== undefined && input.projectId !== null) {
-      const proj = await this.prisma.client.project.findFirst({
-        where: {
-          id: input.projectId,
-          workspaceId: existing.workspaceId,
-          deletedAt: null,
-        },
-        select: { id: true },
-      });
-      if (!proj) {
-        throw new BadRequestException({
-          title: "Project not in the todo's workspace",
-          status: 400,
-        });
-      }
+      await this.assertProjectVisible(
+        userId,
+        input.projectId,
+        existing.workspaceId,
+        "Project not in the todo's workspace",
+      );
     }
 
     if (input.assigneeId !== undefined && input.assigneeId !== null) {

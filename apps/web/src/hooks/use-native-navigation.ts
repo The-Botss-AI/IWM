@@ -28,7 +28,10 @@ export function useNativeNavigation(enabled: boolean): void {
       } catch {
         return;
       }
-      if (target.origin !== window.location.origin) return;
+      // A same-origin URL can still have a `//host` path (`/..//evil.example`
+      // resolves to one), and pushed on its own that path is another origin.
+      // Leave those to the shell's full navigation, which stays on this one.
+      if (target.origin !== window.location.origin || target.pathname.startsWith('//')) return;
       e.preventDefault();
       const path = `${target.pathname}${target.search}${target.hash}`;
       // If the route's code can't load (offline, or replaced by a deploy),

@@ -45,16 +45,14 @@ function SignInForm() {
       : { rememberMe: true },
   });
 
-  // Recovery path: if the page reloaded because the user submitted while JS
-  // was still hydrating, the credentials may have landed in the URL as
-  // ?email=&password=. Rehydrate the form and strip them from history so the
-  // URL bar / browser history / referer header stays clean.
+  // Recovery path: a submit during hydration could once land the fields in the
+  // URL. Only the email is restored: a link must never be able to pre-fill a
+  // password. Either value is stripped from history, the URL bar and any later
+  // Referer header.
   useEffect(() => {
     const email = searchParams.get('email');
-    const password = searchParams.get('password');
-    if (email || password) {
+    if (email || searchParams.has('password')) {
       if (email) setValue('email', email);
-      if (password) setValue('password', password);
       // Drop only the credentials; keep `next` and anything else.
       const params = new URLSearchParams(window.location.search);
       params.delete('email');

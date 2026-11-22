@@ -79,7 +79,8 @@ export class EmailService {
     organizationId?: string;
   }): Promise<{ queued: boolean; stub: boolean }> {
     if (await this.isStub(args.organizationId)) {
-      this.logger.warn(`[MAIL_STUB] password reset for ${args.to} → ${args.url}`);
+      // Never log the URL: it carries a live reset token.
+      this.logger.warn(`[MAIL_STUB] password reset for ${args.to} not sent (no transport)`);
       return { queued: false, stub: true };
     }
     const queued = await this.enqueueSafe(

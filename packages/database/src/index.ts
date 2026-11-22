@@ -28,5 +28,5 @@ export const prisma = withSoftDelete(baseClient);
 
 // Re-export everything from @prisma/client so consumers import enums + types from
 // `@botss/database` (e.g. `import { TaskStatus, type User } from '@botss/database'`).
-export { setSoftDeleteListener, type SoftDeleteEvent } from './soft-delete.js';
+export { setSoftDeleteListener, type SoftDeleteEvent, withSoftDelete } from './soft-delete.js';
 export * from '@prisma/client';

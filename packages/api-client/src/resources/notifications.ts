@@ -35,6 +35,11 @@ export class NotificationsResource {
     return this.http.post('/notifications/subscribe', subscribeOkSchema, input);
   }
 
+  /** Drop this browser's Web Push subscription (sign-out / permission revoked). */
+  unsubscribePush(endpoint: string) {
+    return this.http.delete('/notifications/subscribe', okSchema, { endpoint });
+  }
+
   /** Register a native mobile device token (Expo/FCM) for OS push that reaches
    *  a fully closed app. Called by the web app once the mobile shell hands it
    *  the token over the WebView bridge. */

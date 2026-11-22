@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Hash, MessageSquare, Users, Volume2 } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useMemo } from 'react';
+import { ApiError } from '@botss/api-client';
 import type { InvitePreview } from '@botss/shared-types';
 
 import { Button } from '@/components/ui/button';
@@ -42,8 +43,10 @@ export default function InvitePage() {
     meta: { errorTitle: "Couldn't accept invite" },
   });
 
+  // Members go straight to the chat. Once only: `accept` is a new object on
+  // every render, so without the idle check a failed accept retried forever.
   useEffect(() => {
-    if (preview.data?.alreadyJoined && !accept.isPending) {
+    if (preview.data?.alreadyJoined && accept.isIdle) {
       void accept.mutate();
     }
   }, [preview.data?.alreadyJoined, accept]);
@@ -52,7 +55,13 @@ export default function InvitePage() {
     return <LoadingState />;
   }
   if (preview.isError || !preview.data) {
-    return <UnavailableState message="This invite is no longer valid." />;
+    // A refusal says why (another organization, not in the channel's
+    // workspace); a dead or unknown code reads as no longer valid.
+    const refused =
+      preview.error instanceof ApiError && preview.error.status === 403
+        ? preview.error.message
+        : null;
+    return <UnavailableState message={refused ?? 'This invite is no longer valid.'} />;
   }
   return (
     <InviteCard
@@ -82,7 +91,9 @@ function InviteCard({
     return MessageSquare;
   }, [preview.room.type]);
 
-  const blocked = preview.expired || preview.exhausted;
+  // Expiry and the usage cap stop new people only: a member always gets
+  // through to the chat (acceptInvite answers alreadyJoined first).
+  const blocked = !preview.alreadyJoined && (preview.expired || preview.exhausted);
 
   return (
     <div className="grid h-full place-items-center px-6 py-12">
@@ -114,17 +125,17 @@ function InviteCard({
           </span>
         </div>
 
-        {preview.expired ? (
+        {preview.alreadyJoined ? (
+          <p className="bg-tint-info text-brand-teal mt-4 rounded-md px-3 py-2 text-xs">
+            You&apos;re already in this chat - taking you there.
+          </p>
+        ) : preview.expired ? (
           <p className="bg-tint-error text-state-error mt-4 rounded-md px-3 py-2 text-xs">
             This invite has expired. Ask {preview.invitedBy.name} for a new link.
           </p>
         ) : preview.exhausted ? (
           <p className="bg-tint-error text-state-error mt-4 rounded-md px-3 py-2 text-xs">
             This invite has reached its limit.
-          </p>
-        ) : preview.alreadyJoined ? (
-          <p className="bg-tint-info text-brand-teal mt-4 rounded-md px-3 py-2 text-xs">
-            You&apos;re already in this chat - taking you there.
           </p>
         ) : null}
 

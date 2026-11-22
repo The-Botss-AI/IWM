@@ -51,7 +51,7 @@ import { NotificationBell } from '@/components/shell/notification-bell';
 import { UserAvatar } from '@/components/ui/avatar';
 import { Loader } from '@/components/ui/loader';
 import { useChatRooms } from '@/hooks/use-chat';
-import { useDesktopNotifications } from '@/hooks/use-desktop-notifications';
+import { unsubscribeWebPush, useDesktopNotifications } from '@/hooks/use-desktop-notifications';
 import { useAddons } from '@/hooks/use-addons';
 import { useNavPrefs } from '@/hooks/use-nav-prefs';
 import { useActiveSupportSession } from '@/hooks/use-support-access';
@@ -970,6 +970,7 @@ function useRailSignOut() {
   const queryClient = useQueryClient();
   return useCallback(async () => {
     await unregisterNativePush();
+    await unsubscribeWebPush();
     await authClient.signOut();
     queryClient.clear();
     clearAllInAppNotifications();

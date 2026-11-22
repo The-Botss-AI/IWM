@@ -10,9 +10,13 @@ import {
 import { CurrentUser, type AuthedUser } from '../common/decorators/current-user.decorator';
 import { CurrentWorkspaceId } from '../common/decorators/current-workspace.decorator';
 import { RequestUserScope, type UserScope } from '../common/decorators/user-scope.decorator';
+import { SkipPermissions } from '../common/decorators/skip-permissions.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { UsersService } from './users.service';
 
+// Self-service (`me`) and coworker profiles. UsersService scopes every read to
+// the active workspace, or to people who share a workspace or project.
+@SkipPermissions()
 @Controller('users')
 export class UsersController {
   constructor(private readonly users: UsersService) {}
