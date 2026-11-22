@@ -14,8 +14,13 @@
  *   4. Web code outside the browser using NEXT_PUBLIC_API_URL to reach the
  *      API: on the server that has to be API_INTERNAL_URL.
  *   5. A Node version in the Dockerfile below the one package.json requires.
- *   6. docker/db-setup.mjs no longer applying migrations or writing the `_upgrade`
- *      migration that brings an existing database up to the current schema.
+ *   6. The shipped migrations or the setup that applies them drifting: the
+ *      init migration missing or writing rows, the migrations folder ignored
+ *      again, or quickstart / db-setup creating migrations instead of
+ *      deploying them (and adopting older installs) through
+ *      packages/database/scripts/schema-setup.mjs.
+ *   7. The public demo settings undocumented, or the demo reset losing its
+ *      profile or its safety checks.
  *
  * Plain Node, no dependencies. Run: node scripts/check-docker-config.mjs
  */
@@ -152,11 +157,106 @@ if (imageMajor < wantedMajor) {
   problems.push(`Dockerfile uses node:${imageMajor}, package.json needs Node ${wantedMajor}+.`);
 }
 
-// 6. db-setup keeps both the init and the upgrade path.
-const dbSetup = read('docker/db-setup.mjs');
-for (const needle of ['--from-empty', '--from-schema-datasource', 'migrate', 'deploy']) {
-  if (!dbSetup.includes(needle)) {
-    problems.push(`docker/db-setup.mjs no longer contains "${needle}": fresh installs or upgrades would break.`);
+// 6. Fresh installs apply the shipped migrations; older installs are adopted.
+const schemaSetupPath = 'packages/database/scripts/schema-setup.mjs';
+const schemaSetup = read(schemaSetupPath);
+const initName = /INIT_MIGRATION = '([^']+)'/.exec(schemaSetup)?.[1];
+const migrationsDir = 'packages/database/prisma/migrations';
+if (!initName) {
+  problems.push(`${schemaSetupPath} no longer names INIT_MIGRATION.`);
+} else {
+  let initSql = '';
+  try {
+    initSql = read(`${migrationsDir}/${initName}/migration.sql`);
+  } catch {
+    problems.push(`${migrationsDir}/${initName}/migration.sql (INIT_MIGRATION) does not exist.`);
+  }
+  if (initSql && /^\s*(INSERT|UPDATE|DELETE|COPY)\b/im.test(initSql)) {
+    problems.push(
+      `${initName}/migration.sql writes rows. The init migration must hold schema only.`,
+    );
+  }
+  const older = readdirSync(join(ROOT, migrationsDir), { withFileTypes: true }).filter(
+    (e) => e.isDirectory() && e.name < initName,
+  );
+  for (const e of older) {
+    problems.push(
+      `${migrationsDir}/${e.name} sorts before ${initName}; schema-setup would treat it as an old local migration.`,
+    );
+  }
+}
+try {
+  read(`${migrationsDir}/migration_lock.toml`);
+} catch {
+  problems.push(`${migrationsDir}/migration_lock.toml is missing.`);
+}
+if (/^packages\/database\/prisma\/migrations\/?$/m.test(read('.gitignore'))) {
+  problems.push('.gitignore ignores packages/database/prisma/migrations; the repo ships them.');
+}
+for (const needle of [
+  'migrate',
+  'deploy',
+  '--from-schema-datasource',
+  '--to-schema-datamodel',
+  'resolve',
+  '--applied',
+]) {
+  if (!schemaSetup.includes(needle)) {
+    problems.push(
+      `${schemaSetupPath} no longer contains "${needle}": fresh installs or upgrades would break.`,
+    );
+  }
+}
+for (const [path, text] of [
+  ['docker/db-setup.mjs', read('docker/db-setup.mjs')],
+  ['scripts/quickstart.mjs', read('scripts/quickstart.mjs')],
+]) {
+  if (!text.includes('runSchemaSetup')) {
+    problems.push(`${path} no longer uses runSchemaSetup (${schemaSetupPath}).`);
+  }
+  if (/migrate['"]?,\s*['"]dev|migrate dev|db:migrate/.test(text)) {
+    problems.push(
+      `${path} runs \`prisma migrate dev\`; setup must only deploy shipped migrations.`,
+    );
+  }
+}
+
+// 7. Public demo: the API and web flags are documented, the web build gets
+//    them (checked by 1), and the reset service keeps its safety rails.
+for (const name of ['DEMO_MODE', 'DEMO_LOGIN_EMAIL', 'DEMO_LOGIN_PASSWORD']) {
+  if (!new RegExp(`^${name}=`, 'm').test(envExample)) {
+    problems.push(`${name} is not documented in .env.example.`);
+  }
+}
+const webEnvExample = read('apps/web/.env.example');
+for (const name of [
+  'NEXT_PUBLIC_DEMO_MODE',
+  'NEXT_PUBLIC_DEMO_LOGIN_EMAIL',
+  'NEXT_PUBLIC_DEMO_LOGIN_PASSWORD',
+]) {
+  if (!new RegExp(`^${name}=`, 'm').test(webEnvExample)) {
+    problems.push(`${name} is not documented in apps/web/.env.example.`);
+  }
+}
+const demoReset = composeService(compose, 'demo-reset');
+if (!demoReset) {
+  problems.push('docker-compose.yml has no `demo-reset` service.');
+} else {
+  if (!/profiles: \[demo\]/.test(demoReset)) {
+    problems.push('The demo-reset service must stay behind the `demo` profile.');
+  }
+  if (!demoReset.includes('src/scripts/demo-reset.ts') || !demoReset.includes('postgres:5432')) {
+    problems.push(
+      'The demo-reset service must run src/scripts/demo-reset.ts against the compose Postgres.',
+    );
+  }
+}
+const resetScript = read('apps/api/src/scripts/demo-reset.ts');
+for (const needle of ['isDemoMode()', '--yes-delete-all-demo-data', '_prisma_migrations']) {
+  if (!resetScript.includes(needle)) {
+    problems.push(
+      `apps/api/src/scripts/demo-reset.ts no longer contains "${needle}" (a safety check).`,
+    );
   }
 }
 

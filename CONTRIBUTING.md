@@ -73,6 +73,21 @@ commit `.env` files, keys or real customer data.
 - Prefer composition over inheritance and pure functions over classes outside
   NestJS.
 
+## Database changes
+
+The migration history ships in `packages/database/prisma/migrations`. When you
+change `packages/database/prisma/schema.prisma`:
+
+1. Run `pnpm db:migrate --name <short_change_name>` (`prisma migrate dev`). It
+   writes a new migration folder and applies it to your local database.
+2. Review the SQL. Keep changes additive where you can; a drop or rename needs
+   a note in the pull request and in the README upgrade notes.
+3. Commit the new migration folder together with the schema change. Never edit
+   a migration that has already shipped.
+
+`pnpm quickstart`, the Docker `db-setup` step and production deploys only run
+`prisma migrate deploy` (`pnpm db:migrate:deploy`).
+
 ## Tests
 
 - API: the check scripts in `apps/api/src/scripts/check-*.ts` (run by

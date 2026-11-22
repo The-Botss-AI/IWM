@@ -7,16 +7,19 @@
  *      overwrites) and fills in BETTER_AUTH_SECRET and MAIL_ENCRYPTION_KEY when
  *      they are blank or still the placeholder.
  *   3. Starts the docker compose services and waits for Postgres and Redis.
- *   4. Applies the database schema and seeds the demo data.
+ *   4. Applies the shipped migrations (adopting a database made by an older
+ *      IWM without losing data) and seeds the demo data.
  *
  * Safe to run again: every step skips what is already done.
- * Plain Node, no dependencies, works the same on Windows, macOS and Linux.
+ * Plain Node, works the same on Windows, macOS and Linux. The schema step uses
+ * the installed Prisma (packages/database/scripts/schema-setup.mjs).
  */
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { copyFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const MIN_NODE = [22, 12];
@@ -193,39 +196,46 @@ async function startServices() {
 
 // ─── 4. Database ────────────────────────────────────────────────────────────
 
-function hasMigrations() {
-  const dir = join(ROOT, 'packages/database/prisma/migrations');
-  return existsSync(dir) && readdirSync(dir).some((entry) => /^\d/.test(entry));
-}
-
-function prepareDatabase() {
+async function prepareDatabase() {
   step('Creating the database schema');
 
-  // The repo does not ship migrations yet (see README, "Not included"). The
-  // first run creates an `init` migration from schema.prisma; later runs apply
-  // whatever exists without prompting.
-  const migrated = hasMigrations()
-    ? run('pnpm', [
-        'exec',
-        'dotenv',
-        '-e',
-        '.env',
-        '--',
-        'pnpm',
-        '--filter',
-        '@botss/database',
-        'exec',
-        'prisma',
-        'migrate',
-        'deploy',
-      ])
-    : run('pnpm', ['db:migrate', '--name', 'init', '--skip-seed']);
-  if (!migrated.ok) {
-    fail('Creating the schema failed (see the output above).');
+  const env = readFileSync(join(ROOT, '.env'), 'utf8');
+  const databaseUrl = readEnvValue(env, 'DATABASE_URL');
+  if (!databaseUrl) {
+    fail('DATABASE_URL is not set in .env.', 'Copy it from .env.example.');
   }
-  ok('Schema is up to date');
+  // Applies the migrations the repo ships. A database made before the repo
+  // shipped them is checked against schema.prisma and adopted without losing
+  // data (see packages/database/scripts/schema-setup.mjs and the README,
+  // "Upgrading an existing install").
+  const { runSchemaSetup } = await import(
+    pathToFileURL(join(ROOT, 'packages/database/scripts/schema-setup.mjs')).href
+  );
+  const kind = await runSchemaSetup({
+    dbDir: join(ROOT, 'packages/database'),
+    databaseUrl,
+    log: (msg) => ok(msg),
+    fail,
+  });
+  ok(`Schema is up to date (${kind})`);
 
   step('Seeding demo data');
+  // Same rule as docker/db-setup.mjs: only an empty database gets the demo
+  // data, so a rerun never adds demo accounts to a database in use.
+  const { PrismaClient } = createRequire(join(ROOT, 'packages/database/package.json'))(
+    '@prisma/client',
+  );
+  const prisma = new PrismaClient({ datasourceUrl: databaseUrl });
+  let users = 0;
+  try {
+    users = await prisma.user.count();
+  } finally {
+    await prisma.$disconnect();
+  }
+  if (users > 0) {
+    ok('The database already has users, demo seed skipped');
+    return;
+  }
   if (!run('pnpm', ['db:seed:dev']).ok) {
     fail('Seeding failed (see the output above).');
   }
@@ -239,7 +249,7 @@ async function main() {
   checkPrerequisites();
   prepareEnvFiles();
   await startServices();
-  prepareDatabase();
+  await prepareDatabase();
 
   console.log(`
 ${green(bold('All set.'))}

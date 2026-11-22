@@ -4,6 +4,7 @@ import { headers } from 'next/headers';
 import type { ReactNode } from 'react';
 
 import { Providers } from '@/components/providers';
+import { DemoBanner } from '@/components/shell/demo-banner';
 import { ThemeMount, ThemePreScript } from '@/components/shell/theme-mount';
 import { env } from '@/lib/env';
 import '@/styles/globals.css';
@@ -85,6 +86,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
            * route - auth pages, app shell, public reader, dev tools. */}
           <ThemeMount />
           {children}
+          <DemoBanner />
         </Providers>
       </body>
     </html>

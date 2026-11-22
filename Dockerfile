@@ -62,6 +62,9 @@ ARG NEXT_PUBLIC_SENTRY_DSN=
 ARG NEXT_PUBLIC_SENTRY_ENVIRONMENT=
 ARG NEXT_PUBLIC_SENTRY_RELEASE=
 ARG NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE=
+ARG NEXT_PUBLIC_DEMO_MODE=
+ARG NEXT_PUBLIC_DEMO_LOGIN_EMAIL=
+ARG NEXT_PUBLIC_DEMO_LOGIN_PASSWORD=
 # The web build runs outside turbo so the NEXT_PUBLIC_* args reach `next build`
 # whatever turbo's env filtering does. Its packages are built first.
 RUN pnpm exec turbo run build --filter=@botss/web^... --concurrency=1 \

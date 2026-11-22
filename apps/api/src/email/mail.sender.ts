@@ -1,5 +1,6 @@
 import { createTransport, type Transporter } from 'nodemailer';
 
+import { demoSkip, isDemoMode } from '../common/demo-mode';
 import { resolvePublicHost } from '../mail/mail-ssrf';
 
 /**
@@ -120,6 +121,19 @@ function resolveSmtpRelay(env: NodeJS.ProcessEnv): {
   };
 }
 
+// eslint-disable-next-line no-console
+const consoleLog = { log: (msg: string) => console.log(msg) };
+
+/** What a send reports in demo mode: accepted, nothing left the server. */
+function demoOutcome(args: MailSendArgs): MailSendOutcome {
+  return {
+    messageId: 'demo-mode',
+    response: 'skipped (DEMO_MODE)',
+    accepted: [args.to],
+    rejected: [],
+  };
+}
+
 export class MailSender {
   private readonly transporter: Transporter | null;
   private readonly from: string;
@@ -171,6 +185,12 @@ export class MailSender {
    * still boot, and individual sends will retry per-attempt.
    */
   async verify(): Promise<{ ok: true } | { ok: false; error: MailSendError }> {
+    if (demoSkip(consoleLog, 'SMTP verify')) {
+      return {
+        ok: false,
+        error: new MailSendError('Outgoing mail is turned off (DEMO_MODE)', { transient: false }),
+      };
+    }
     if (!this.transporter) {
       return {
         ok: false,
@@ -195,6 +215,7 @@ export class MailSender {
    * Rejects immediately if no transport is configured.
    */
   async send(args: MailSendArgs): Promise<MailSendOutcome> {
+    if (demoSkip(consoleLog, `email ${JSON.stringify(args.subject)}`)) return demoOutcome(args);
     if (!this.transporter) {
       // eslint-disable-next-line no-console
       console.log(
@@ -257,6 +278,7 @@ export class MailSender {
     },
     args: MailSendArgs,
   ): Promise<MailSendOutcome> {
+    if (demoSkip(consoleLog, `email ${JSON.stringify(args.subject)}`)) return demoOutcome(args);
     // creds.host comes from the org-level mail config (admin-supplied);
     // re-resolve and refuse private/internal targets before connecting.
     const target = await resolvePublicHost(creds.host);
@@ -323,6 +345,11 @@ export class MailSender {
       send: (args: MailSendArgs & { from: { name: string; address: string } }) => Promise<void>,
     ) => Promise<T>,
   ): Promise<T> {
+    if (isDemoMode()) {
+      return fn(async (args) => {
+        demoSkip(consoleLog, `email ${JSON.stringify(args.subject)}`);
+      });
+    }
     // The host is typed by the user; refuse private/internal targets.
     const target = await resolvePublicHost(login.host);
     const transport = createTransport({

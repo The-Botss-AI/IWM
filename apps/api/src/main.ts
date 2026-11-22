@@ -80,6 +80,7 @@ import { setAuthInstance } from './auth/auth.service';
 import { PreflightError, runPreflight } from './common/preflight';
 import { reportSignInFailure } from './security-alerts/sign-in-failure-sink';
 import { isAllowedBetterAuthRoute } from './auth/better-auth-routes';
+import { isDemoMode } from './common/demo-mode';
 import { platformEnvWarnings } from './common/platform-env';
 import { getSharedMailSender } from './email/email.module';
 import { bootstrapWorker } from './worker-bootstrap';
@@ -284,14 +285,19 @@ async function bootstrap(): Promise<void> {
   // per 15 min per IP. The limiter is in-memory; each API process keeps its
   // own bucket, which is fine for a single server. To scale out
   // horizontally, swap for `rate-limit-redis`.
+  // A public demo (DEMO_MODE=true) halves it: the demo login is printed on
+  // the sign in page, so nobody needs more attempts than that.
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 10,
+    max: isDemoMode() ? 5 : 10,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
     message: { title: 'Too many auth attempts. Try again later.', status: 429 },
     // Pre-flight CORS requests should not count toward the bucket.
     skip: (req) => req.method === 'OPTIONS',
+    // Only failed attempts count, so visitors sharing a login (the demo)
+    // are not locked out by each other's successful sign-ins.
+    skipSuccessfulRequests: true,
   });
   expressApp.use('/api/auth/sign-in', authLimiter);
   expressApp.use('/api/auth/sign-up', authLimiter);
@@ -453,6 +459,23 @@ async function bootstrap(): Promise<void> {
     skip: (req) => req.method !== 'POST',
   });
   expressApp.use(`/${apiPrefix}/chat/requests`, chatRequestLimiter);
+
+  // Public demo: an outer bound on writes per IP, so one visitor cannot flood
+  // the shared data between nightly resets. Reads stay unlimited here.
+  if (isDemoMode()) {
+    const demoWriteLimiter = rateLimit({
+      windowMs: 60 * 1000,
+      max: 60,
+      standardHeaders: 'draft-7',
+      legacyHeaders: false,
+      message: { title: 'Too many changes in a short time. Try again in a minute.', status: 429 },
+      skip: (req) => ['GET', 'HEAD', 'OPTIONS'].includes(req.method),
+    });
+    expressApp.use(`/${apiPrefix}`, demoWriteLimiter);
+    logger.warn(
+      'DEMO_MODE is on: outgoing mail, push and cPanel calls are skipped and some actions are refused. Never use it on a real install.',
+    );
+  }
 
   // Only the Better Auth endpoints the apps actually call are reachable; see
   // `auth/better-auth-routes.ts` for why the rest (update-user above all) are

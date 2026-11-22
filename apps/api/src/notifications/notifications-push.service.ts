@@ -12,6 +12,7 @@ import {
 import { Expo, type ExpoPushMessage } from 'expo-server-sdk';
 import * as webpush from 'web-push';
 
+import { demoSkip } from '../common/demo-mode';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeEventsService } from './realtime-events.service';
 
@@ -199,6 +200,9 @@ export class NotificationsPushService {
     } catch (err) {
       this.logger.warn(`live push fan-out failed ${who}: ${(err as Error)?.message ?? 'unknown'}`);
     }
+    // A public demo keeps the in-app leg above but never reaches phones or
+    // browser push services.
+    if (demoSkip(this.logger, `device push to ${who}`)) return { sent: 0, dropped: 0 };
     // Do Not Disturb silences every push leg (phones and browsers) except
     // calls, which still arrive as a silent "Call from <name>" notification,
     // and meeting reminders, which ring as usual (no DND lookup at all).

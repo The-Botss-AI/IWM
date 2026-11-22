@@ -13,3 +13,9 @@ export const problemDetailsSchema = z.object({
   code: z.string().optional(),
 });
 export type ProblemDetails = z.infer<typeof problemDetailsSchema>;
+
+/**
+ * `code` of the 403 the API answers in a public demo (`DEMO_MODE=true`) for
+ * actions that are turned off there. The web app shows its `detail`.
+ */
+export const DEMO_MODE_PROBLEM_CODE = 'demo-mode';

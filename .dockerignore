@@ -13,7 +13,5 @@
 **/.env.*
 !**/.env.example
 
-# Local Prisma migrations stay on the host; db-setup mounts them.
-packages/database/prisma/migrations
 
 *.log
