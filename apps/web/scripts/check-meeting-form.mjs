@@ -8,7 +8,11 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
 const WEB_DIR = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const source = readFileSync(join(WEB_DIR, 'src', 'lib', 'meetings', 'meeting-form.ts'), 'utf8');
+// Normalise Windows line endings so the markers match on every checkout.
+const source = readFileSync(
+  join(WEB_DIR, 'src', 'lib', 'meetings', 'meeting-form.ts'),
+  'utf8',
+).replace(/\r\n/g, '\n');
 function slice(startMarker) {
   const start = source.indexOf(startMarker);
   assert.ok(start >= 0, 'missing ' + startMarker);
