@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/web/public/branding/logo-light.png">
+    <img src="apps/web/public/branding/logo.png" alt="IWM, I Will Manage" height="96">
+  </picture>
+</p>
+
 # IWM
 
 An open-source, self-hostable all-in-one workspace for teams. It covers projects and tasks, leads, clients and a client portal, invoices and finance, chat and voice/video calls, documents and files, mail, and HR (attendance, leave, timesheets, payroll), on web, desktop and mobile.
@@ -591,18 +598,18 @@ Both are thin shells around the hosted web app. The desktop app adds a tray, dee
 - Config is in `apps/desktop/electron-builder.yml`. Replace `appId: com.example.iwm`, `productName` and `copyright`.
 - Auto-update: `electron-updater` is included but no feed is configured. Add a `publish:` entry (for example `provider: generic` with your own URL) to ship updates.
 - On Windows, keep `appId` in sync with `app.setAppUserModelId(...)` in `apps/desktop/src/main.ts` (both `com.example.iwm`), or system notifications will not show.
-- Icons: replace `apps/desktop/build/icon.ico`, `icon.icns` and a 512x512 `icon.png` (for example with `npx electron-icon-builder`). The files there are still the original deployment's logo.
+- Icons: `apps/desktop/build/icon.ico`, `icon.icns` and a 512x512 `icon.png` carry the IWM icon. Replace them to rebrand (for example with `npx electron-icon-builder`).
 
 ### Mobile (Expo)
 
 - Dev: `pnpm --filter @botss/mobile dev` (Expo SDK 52, React Native 0.76). Use `pnpm --filter @botss/mobile android` or `ios` for a native dev build.
 - Set your web app URL with `EXPO_PUBLIC_APP_URL`, the Expo project id with `EXPO_PUBLIC_EAS_PROJECT_ID` (both in `apps/mobile/.env`), and the app ids in `apps/mobile/app.json` (`name`, `slug`, `ios.bundleIdentifier`, `android.package`, currently `com.example.iwm`).
-- Icons and splash: replace the files in `apps/mobile/assets/` (`icon.png`, `adaptive-icon.png`, `splash-icon.png`). They are still the original deployment's logo.
+- Icons and splash: `apps/mobile/assets/` holds the IWM icon (`icon.png`, `adaptive-icon.png` with `adaptive-icon-background.png`, `splash-icon.png`). Replace them to rebrand.
 - Build installable apps with EAS or `expo run:android` / `expo run:ios`.
 
 ## 9. Invoice and payslip templates
 
-Each folder in `apps/api/invoice-templates/` is one invoice design: `template.html`, optional `styles.css`, `meta.json` and `assets/`. Copy `default/` to start your own. The payslip layout is in `apps/api/payslip-templates/default/` (`template.html`, `styles.css`, `logo.png`, `stamp.png`). Replace the placeholder logo and stamp. Each organization sets its payslip signatory in Settings > Add-ons > HR; the root (platform) organization falls back to `PAYSLIP_SIGNATORY_NAME` and `PAYSLIP_SIGNATORY_TITLE`. The logo and stamp appear only on the root organization's payslips. Templates reload when their files change. `pnpm test` validates them. Use `INVOICE_TEMPLATES_DIR` to keep templates outside the repo. PDFs are rendered by Gotenberg.
+Each folder in `apps/api/invoice-templates/` is one invoice design: `template.html`, optional `styles.css`, `meta.json` and `assets/`. Copy `default/` to start your own. The payslip layout is in `apps/api/payslip-templates/default/` (`template.html`, `styles.css`, `logo.png`, `stamp.png`). The bundled logo is the IWM logo and the stamp is a placeholder: replace both with your own. Each organization sets its payslip signatory in Settings > Add-ons > HR; the root (platform) organization falls back to `PAYSLIP_SIGNATORY_NAME` and `PAYSLIP_SIGNATORY_TITLE`. The logo and stamp appear only on the root organization's payslips. Templates reload when their files change. `pnpm test` validates them. Use `INVOICE_TEMPLATES_DIR` to keep templates outside the repo. PDFs are rendered by Gotenberg.
 
 ## 10. Common commands
 
@@ -658,11 +665,11 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## 13. Known limitations
 
-- **UI wording.** Some UI strings still say "Botss" (for example on the sign-in pages, in the logo alt text, in the footer of public forms and in some admin and mail settings messages).
+- **UI wording.** Some UI strings still say "Botss" (for example on the sign-in pages, in the footer of public forms and in some admin and mail settings messages).
 - **Package scope.** Packages use the `@botss/*` scope. Renaming is planned.
 - **Deep link scheme.** The desktop and mobile apps use the `botss://` scheme (`apps/desktop/src/main.ts`, `apps/mobile/app.json`).
 - **Internal root organization id.** The root platform organization id is the constant `ROOT_ORG_ID` (`org_root_thebotss`) in `apps/api/src/organizations/organizations.constants.ts` and the seed. It is an internal identifier only and is not shown to users.
-- **Desktop and mobile icons.** The desktop icons (`apps/desktop/build/`) and the mobile icons and splash (`apps/mobile/assets/`) are still the original logo and must be replaced before you distribute a build. The web branding SVGs and the payslip `logo.png` and `stamp.png` are neutral placeholders.
+- **Branding.** The web logos (`apps/web/public/branding/`: `logo.png`, `logo-light.png` for dark mode, `logo-icon.png`, `icon-192.png`, `apple-touch-icon.png`, `badge-72.png`), the desktop and mobile icons and the payslip `logo.png` are the IWM logo. Replace them with your own, keeping the file names. The payslip `stamp.png` is a neutral placeholder.
 - **macOS builds** are unsigned and not notarized.
 
 ## 14. Contributing, security reporting and license

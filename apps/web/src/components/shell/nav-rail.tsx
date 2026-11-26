@@ -313,8 +313,8 @@ function IconRail({
       className="flex w-[68px] shrink-0 flex-col items-center gap-[3px] overflow-y-auto pb-3 pt-3.5"
       style={{ background: RAIL_BG }}
     >
-      {/* The brand mark, not a letter. `logo-icon.svg` is the hexagon alone,
-          which is what fits a 34px square - the wordmark would be illegible
+      {/* The brand mark, not a letter. `logo-icon.png` is the app icon alone,
+          which is what fits a 34px square; the wordmark would be illegible
           at this width. The top bar uses the full wordmark for the same
           reason in reverse. */}
       <Link
