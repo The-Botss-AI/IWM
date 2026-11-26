@@ -45,20 +45,20 @@ export const metadata: Metadata = {
   title: 'The Botss - Internal Platform',
   description: 'Internal workspace for The Botss team.',
   applicationName: 'The Botss',
-  // icon.svg in this folder is auto-picked up by the App Router and used as
-  // the favicon. Listing it here keeps the metadata explicit for browsers
-  // that look for the link tag rather than discovering /icon.
+  // Favicon and home screen icon, from public/branding (replace the files to rebrand).
   icons: {
-    icon: [{ url: '/branding/logo-icon.svg', type: 'image/svg+xml', sizes: 'any' }],
+    icon: [
+      { url: '/branding/logo-icon.png', type: 'image/png', sizes: '512x512' },
+      { url: '/branding/icon-192.png', type: 'image/png', sizes: '192x192' },
+    ],
+    apple: [{ url: '/branding/apple-touch-icon.png', sizes: '180x180' }],
   },
   openGraph: {
     title: 'The Botss - Internal Platform',
     description: 'Internal workspace for The Botss team.',
     siteName: 'The Botss',
-    // og-image.png is a TODO - designer-ready 1200×630 asset hasn't been
-    // produced yet. Until it lands, fall back to the SVG icon so social
-    // unfurls at least render the brand mark instead of a broken image.
-    images: [{ url: '/branding/logo-icon.svg', width: 512, height: 512, alt: 'The Botss' }],
+    // No 1200x630 og-image yet: social unfurls show the app icon.
+    images: [{ url: '/branding/logo-icon.png', width: 512, height: 512, alt: 'IWM' }],
   },
 };
 

@@ -201,9 +201,8 @@ export function TopBar() {
     <header className="bg-bg-app sticky top-0 z-20 flex h-16 items-center justify-between gap-3 px-4 sm:px-6">
       {/* Left: brand mark. Mobile shows the icon-only variant so the wide
           wordmark doesn't crowd the centered nav pill on narrow screens;
-          tablet/desktop (sm and up) get the full wordmark from
-          `/branding/logo.svg`. Both variants source from the same
-          branding folder. */}
+          tablet/desktop (sm and up) get the full wordmark
+          (`/branding/logo.png`, `logo-light.png` in dark mode). */}
       <Link
         href="/home"
         aria-label="Home"
